@@ -148,10 +148,14 @@ implemented and pending final acceptance. Phase 3B.2 organization target and cha
 and Phase 3B.3 server-side organization-target DNS TXT verification are implemented. The verifier
 uses the system-configured DNS resolver and bounded exact TXT matching, and atomically consumes
 challenges before marking targets verified. No target API or challenge rate limits are implemented;
-enforce rate limits before exposing challenge operations. A/AAAA safety validation, HTTP scanning,
-queues, workers, results, and production egress controls remain unimplemented. Existing scan
-creation continues to persist Phase 2 records only; the Phase 3 work does not alter Phase 2
-permissions and does not claim production readiness.
+enforce rate limits before exposing challenge operations. Phase 3B.4 remains **PROPOSED — NOT
+IMPLEMENTED** and does not change the Phase 3B.3 TXT resolver. Its canonical A/AAAA resolver
+algorithm and positive IPv4/IPv6 approval blocker are described in the
+[Phase 3 architecture proposal](./phase-3-architecture.md#dns-aaaa-resolution-proposal) and
+[IP-policy section](./phase-3-architecture.md#explicit-ipv4ipv6-policy). It does not authorize
+Phase 3C, a queue, worker, scanner, or public target route. HTTP transport, scanning, results, and
+production egress controls remain unimplemented; Phase 2 permissions are unchanged, and this is not
+a production-readiness claim.
 
 ## Planned, not implemented
 
