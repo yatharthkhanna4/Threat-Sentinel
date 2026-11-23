@@ -26,8 +26,27 @@ from .types import (
     ResolutionStatus,
     ValidatedResolution,
 )
+from .dns_address import (
+    DNS_QUERY_TIMEOUT_SECONDS,
+    DNS_RESOLUTION_DEADLINE_SECONDS,
+    MAX_DNS_MESSAGE_SIZE,
+    MAX_DNS_RESOURCE_RECORDS,
+    DNSAddressResolutionError,
+    DNSAddressResolver,
+    DNSAddressTransportError,
+    DNSMessageTransport,
+)
 
 __all__ = (
+    "DNS_QUERY_TIMEOUT_SECONDS",
+    "DNS_RESOLUTION_DEADLINE_SECONDS",
+    "MAX_CNAME_LINKS",
+    "MAX_DNS_MESSAGE_SIZE",
+    "MAX_DNS_RESOURCE_RECORDS",
+    "DNSAddressResolutionError",
+    "DNSAddressResolver",
+    "DNSAddressTransportError",
+    "DNSMessageTransport",
     "AddressClassification",
     "AddressPolicyError",
     "AddressRecord",
