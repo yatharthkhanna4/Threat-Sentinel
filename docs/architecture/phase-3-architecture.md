@@ -7,23 +7,24 @@ document and formally signed off and closed Phase 3A. Phase 3B is authorized. Th
 records intended behavior; Phase 3B.3 implements server-side DNS TXT verification for organization
 targets, including atomic one-time challenge consumption and `verified_at` updates. This is a
 service capability only: no public target API or issuance/verification rate limit is implemented.
-Phase 3B.1 hostname canonicalization is implemented and pending final acceptance. Secure A/AAAA
-resolution, HTTP scanning, queues, workers, result APIs, UI, and production egress controls remain
+Phase 3B.1 hostname canonicalization is implemented and pending final acceptance. Phase 3B.4.1–3
+implement the approved IP destination policy, immutable DNS-resolution models, and secure dual-stack
+resolver. Phase 3B.4.4 implements the approved one-shot pinned HTTP/TLS transport. Target routes,
+scanner execution, queues, workers, result APIs, UI, and production egress controls remain
 unimplemented; this is not a production-readiness claim.
 
 **Policy v1 approved and implementation authorized on 2026-11-24.**
 The project owner approved IP Destination Policy v1 on `2026-11-24`. The first implementation
 deliverable now exists: authoritative IANA CSV snapshots, a versioned normalized policy artifact,
-a pure address-classification module, and tests. This is not an implementation of DNS A/AAAA
-resolution or outbound execution.
+a pure address-classification module, and tests. That policy deliverable did not itself implement
+DNS A/AAAA resolution or outbound execution; those capabilities are now implemented separately
+under Phase 3B.4.
 
-**Not yet implemented:** DNS A/AAAA resolution, socket connections, outbound HTTP/TLS, public
-target routes, scanner execution, queue/worker functionality, and production deployment
-configuration. The DNS A/AAAA and outbound sections below remain future implementation proposals
-separate from the implemented Phase 3B.3 TXT lookup. They do not change TXT resolver
-configured-nameserver behavior or dnspython exception handling. Production-provider egress review
-is still required before production deployment. The canonical future resolver algorithm and
-transport design remain specified in the [DNS A/AAAA resolution proposal](#dns-aaaa-resolution-proposal)
+**Not implemented:** public target routes, scanner execution, queue/worker functionality, and
+production deployment configuration. The approved Phase 3B.4 implementation does not change TXT
+resolver configured-nameserver behavior or dnspython exception handling. Production-provider
+egress review is still required before production deployment. The canonical resolver and transport
+requirements remain specified in the [DNS A/AAAA resolution proposal](#dns-aaaa-resolution-proposal)
 and [Explicit IPv4/IPv6 policy](#explicit-ipv4ipv6-policy) sections below.
 
 The design preserves the Phase 2 identity, tenancy, authorization, audit, lifecycle, and scan-record
@@ -197,14 +198,14 @@ invalidates the pending verification. OWNER/ADMIN are the only authorized organi
 There is no public target route, rate limiter, A/AAAA target-address validation, HTTP request, or
 scanner in this implementation. Target verification expiry/reverification policy remains open.
 
-#### PROPOSED — NOT IMPLEMENTED: Phase 3B.4 DNS address resolution and outbound security
+#### Phase 3B.4 DNS address resolution and outbound security
 
-**Approved scope retained from Phase 3A.** The proposal is limited to resolving a verified exact
-hostname, validating A and AAAA answers, and creating a one-shot pinned HTTP/HTTPS transport. It
-does not add scanner checks, queue claims, workers, result storage, redirect following, arbitrary
+**Approved scope retained from Phase 3A.** The implementation is limited to resolving a verified
+exact hostname, validating A and AAAA answers, and providing a one-shot pinned HTTP/HTTPS transport.
+It does not add scanner checks, queue claims, workers, result storage, redirect following, arbitrary
 ports, arbitrary paths or headers, scanning UI, or target APIs. HTTP is 80 and HTTPS is 443 only;
-methods remain registered GET/HEAD operations, origin-root only, read-only and no credentials,
-cookies or user-controlled headers.
+methods remain GET/HEAD, origin-root only, read-only and without credentials, cookies or
+user-controlled headers.
 
 ##### Recommended architecture and data flow
 
@@ -495,11 +496,11 @@ version. The TCP call is `socket.connect` to a literal IP tuple. The HTTP `Host`
 SNI remain the canonical hostname. No redirect target, URL, proxy or destination IP is accepted
 by this context.
 
-##### Safe outbound HTTP/HTTPS transport proposal
+##### Safe outbound HTTP/HTTPS transport requirements
 
-`http.client` remains a proposed initial candidate, not an approved implementation. It is free,
-available in the existing runtime and can override `HTTPConnection.connect` for literal-IP sockets.
-The existing `jwks.py` implementation demonstrates reusable HTTPS pinning mechanics:
+The transport uses a dedicated bounded HTTP/1.1 parser; `http.client.HTTPResponse` is not used
+because its normalized response interface does not preserve the raw duplicate/framing semantics
+required here. The existing `jwks.py` implementation demonstrates reusable HTTPS pinning mechanics:
 `PinnedHttpsConnection.connect()` creates an AF_INET/AF_INET6 socket and calls `connect()` with
 a previously resolved IP, then wraps it with the supplied TLS context and `server_hostname=self.host`.
 Its `_resolve_addresses()` currently uses `socket.getaddrinfo` and `_is_prohibited_address()` relies
@@ -509,14 +510,13 @@ uses fixed headers and rejects redirects by not following HTTP redirects, but it
 the scanner's complete HTTP/1.1 incremental parser, HTTP port 80, aggregate header accounting,
 chunk/trailer validation, decompression limits, multiple-address fallback or stricter overall
 deadline. The JWKS transport must be treated as reference pinning code only; scanner requirements
-need a newly designed or substantially strengthened transport.
+are served by the separately implemented `pinned_http.py` transport.
 
-`httpx` is not the preferred initial implementation because standard pooling and environment
+`httpx` is not used because standard pooling and environment
 proxy behavior add reinsertion and origin-isolation risks unless replaced with a fully custom
 transport. Existing `httpx2` is in the development dependency group and is not a runtime outbound
-scanner dependency. `urllib` is not preferred because proxy and redirect behavior are harder to
-prove closed. If `http.client` is selected, security acceptance must verify literal sockets,
-HTTP/1.1 framing, limits and deadlines before approval.
+scanner dependency. `urllib` is not used because proxy and redirect behavior are harder to prove
+closed.
 
 Pinned socket/connection handling and HTTP response parsing are separate responsibilities. The
 implementation must use a separately implemented bounded HTTP/1.1 parser over the pinned socket;
@@ -525,7 +525,7 @@ requirements. A future review may select a standard-library parser only after de
 the exact parser meets every stated framing, header, trailer, size, and deadline requirement.
 Regardless of parser choice, none of those requirements may be weakened.
 
-The proposed implementation has these properties:
+The implementation has these properties:
 
 - subclasses `HTTPConnection` and `HTTPSConnection` or owns equivalent stateful one-shot classes;
 - overrides `connect()` to create AF_INET or AF_INET6 sockets and call `connect((literal_ip,
@@ -730,19 +730,16 @@ retention and multi-tenant audit risk.
    address/CNAME snapshot and no cross-connection address reuse.
 5. Pinned-address fallback only within one immutable validated set: approve deterministic family
    fallback with no fresh DNS lookup, and rejection of any mixed or prohibited answer set.
-6. One-shot standard-library pinned transport, subject to security acceptance tests: approve
-   `http.client` as a candidate only; custom socket pinning and strengthened HTTP/1.1 parsing,
-   framing, limits and deadlines remain required.
-7. Fixed scanner-owned headers only: approve the reviewed fixed allowlist; no arbitrary,
-   caller-supplied or credential-bearing headers are permitted.
-8. Identity-only content coding: accept the fixed `Accept-Encoding: identity` request and acceptance
-   of absent or `identity` `Content-Encoding` only, with rejection of every other coding and no
-   decompression. This is the settled initial proposal and is a prerequisite to implementation
-   security acceptance.
+6. **Implemented in Phase 3B.4.4:** a one-shot literal-IP socket transport with a dedicated bounded
+   HTTP/1.1 parser; `http.client` is not the response parser.
+7. **Implemented in Phase 3B.4.4:** fixed `Host`, `Accept-Encoding: identity`, and `Connection: close`
+   headers only; no arbitrary or credential-bearing request headers.
+8. **Implemented in Phase 3B.4.4:** identity-only content coding, rejecting every other coding and
+   performing no decompression.
 
 #### Per-connection DNS and IP safety
 
-The proposed, unimplemented Phase 3B.4 per-connection resolution and address-pinning requirements
+The approved Phase 3B.4 per-connection resolution and address-pinning requirements
 are specified in the [DNS A/AAAA resolution proposal](#dns-aaaa-resolution-proposal). Its single
 positive-IP approval gate and mapped-address rejection requirements are in
 [Explicit IPv4/IPv6 policy](#explicit-ipv4ipv6-policy). This proposal does not change the
@@ -1263,7 +1260,7 @@ before production scanning. A green unit-test suite is not proof of safe product
 | Phase | Scope and dependencies | Exit criteria and boundary |
 |---|---|---|
 | **3A — Architecture and threat model** | This specification; depends on Phase 2 foundation. | The nine product-owner-approved architecture decisions are recorded; the complete Phase 3A specification is formally signed off and closed. Documentation only; this sign-off does not itself implement features. |
-| **3B — Target verification and outbound security** | Authorized after 3A sign-off and underway. Phase 3B.1 implements hostname canonicalization, pending final acceptance. Phase 3B.2 adds organization-only target and challenge persistence with a one-hour initial challenge expiry. Phase 3B.3 adds bounded organization-target DNS TXT verification and atomic challenge consumption, but no public target API, rate limit, A/AAAA policy, or HTTP transport. A Phase 3B.4 architecture proposal assesses A/AAAA resolution, explicit IP policy, address pinning, pinned HTTP/HTTPS transport and deployment egress; it remains proposed, not implemented, and not approved for implementation. | Before any target route or connection is exposed, require positive IP policy approval, acceptance of the resolver failure rules and pinned transport/HTTP parser, acceptance of identity-only content coding, required security acceptance tests, and separate infrastructure-egress review. No scanner or Phase 3C implementation may begin as part of 3B.4. |
+| **3B — Target verification and outbound security** | Authorized after 3A sign-off and underway. Phase 3B.1 implements hostname canonicalization, pending final acceptance. Phase 3B.2 adds organization-only target and challenge persistence with a one-hour initial challenge expiry. Phase 3B.3 adds bounded organization-target DNS TXT verification and atomic challenge consumption, but no public target API or rate limit. Phase 3B.4.1–3 implement IP Destination Policy v1, immutable DNS models, and the secure dual-stack resolver. Phase 3B.4.4 implements one-shot pinned HTTP/HTTPS transport with strict bounded parsing and accounting. | No scanner, target route, or Phase 3C implementation is added as part of 3B.4. Production use remains gated on separate infrastructure-egress review and security acceptance. |
 | **3C — Persistence and execution contracts** | Depends on approved 3B target and policy contracts. Additive target/run/attempt/finding/evidence schema blueprint into implementation, versioned typed contracts, constraints/indexes, idempotency and provenance. | Phase 2 migration compatibility; migration upgrade/downgrade checks; PostgreSQL constraints and tenant-scoped repository tests. No network scanning or worker dispatch. |
 | **3D — Durable queue and worker** | Depends on 3C lifecycle/schema and 3B egress boundary. Implement PostgreSQL claim/lease/heartbeat/fencing, admission, retries, cancellation, reaper, isolated worker process. | PostgreSQL concurrency tests cover duplicate claims, crash recovery, stale workers, cancellation, retry ceiling, no open network transaction, and no duplicate persisted results. No detection modules. |
 | **3E — Scanner framework and safe transport** | Depends on 3B transport policy, 3C contract, and 3D execution lifecycle. Implement only a static trusted registry, bounded execution context, typed progress/observations/findings/errors, safe shared client. | All scanners must use the guarded transport; version/provenance and resource budgets are enforced; adversarial network fixture suite passes. No arbitrary plugins or exploit behavior. |
@@ -1383,10 +1380,9 @@ prerequisite before enabling its dependent feature.
   matching, dnspython with the system resolver, 3-second query/10-second overall bounds, 8-link
   CNAME limit, one TCP retry for truncation, and authorized two-transaction verification with
   atomic challenge consumption. No public target route or rate limit is implemented.
-- **PROPOSED — NOT IMPLEMENTED in Phase 3B.4:** explicit A/AAAA/CNAME resolution, versioned
-  IPv4/IPv6 special-range policy, immutable validated resolutions, literal-IP socket pinning,
-  a one-shot HTTP/1.1/HTTPS transport and infrastructure egress controls. Implementation requires
-  the open approvals listed in this proposal and must not add a queue or scanner.
+- **Implemented in Phase 3B.4.1–3 and 3B.4.4:** explicit A/AAAA/CNAME resolution, versioned
+  IPv4/IPv6 policy, immutable validated resolutions, literal-IP socket pinning, and a one-shot
+  HTTP/1.1/HTTPS transport. Infrastructure egress controls remain a separate production prerequisite.
 - **Before/during remaining Phase 3B — target verification and outbound security:** DNS challenge
   record TTL; target-verification expiry and re-verification behavior; approval of the
   [positive IPv4/IPv6 policy](#explicit-ipv4ipv6-policy); HTTP/1.1 transport

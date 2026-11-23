@@ -150,13 +150,13 @@ uses the system-configured DNS resolver and bounded exact TXT matching, and atom
 challenges before marking targets verified. No target API or challenge rate limits are implemented;
 enforce rate limits before exposing challenge operations.
 
-The project owner approved **IP Destination Policy v1** on `2026-11-24`; implementation of that
-policy is now authorized and the versioned pure evaluator is implemented. This approval authorizes
-only the registry snapshots, normalized policy artifact, classification module, and tests. It does
-not implement DNS A/AAAA resolution, socket connections, outbound HTTP, TLS transport, a public
-target route, a scanner, a queue, a worker, or production deployment configuration. Production
-provider egress review remains required before deployment. The canonical future A/AAAA resolver
-algorithm and outbound design are described in the
+The project owner approved **IP Destination Policy v1** on `2026-11-24`; its snapshots, normalized
+policy artifact, pure evaluator, and tests are implemented. Phase 3B.4.1–3 also implement immutable
+DNS-resolution models and secure dual-stack resolution. Phase 3B.4.4 implements a one-shot pinned
+HTTP/HTTPS transport with strict bounded HTTP/1.1 parsing and caller-owned scan accounting. These
+capabilities do not add a public target route, scanner, queue, worker, or production deployment
+configuration. Production-provider egress review remains required before deployment. The approved
+resolver and outbound requirements are described in the
 [Phase 3 architecture proposal](./phase-3-architecture.md#dns-aaaa-resolution-proposal) and
 [IP-policy section](./phase-3-architecture.md#explicit-ipv4ipv6-policy).
 
