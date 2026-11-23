@@ -144,14 +144,19 @@ canonicalization is implemented and pending final acceptance. Phase 3B.2 adds or
 and challenge persistence; Phase 3B.3 adds server-side DNS TXT ownership verification and atomic
 challenge consumption for organization targets. No target API is exposed and no challenge rate
 limits are implemented.
-Phase 3B.4 is **PROPOSED — NOT IMPLEMENTED** and does not change Phase 3B.3 TXT resolution or
-authorize Phase 3C, a queue, worker, scanner, or public target route. Its canonical resolver
-algorithm and positive IPv4/IPv6 approval blocker are in the
+**IP Destination Policy v1 was approved by the project owner on 2026-11-24.**
+Implementation of that policy is now authorized and is limited to authoritative IANA snapshots,
+a versioned normalized policy artifact, a pure address evaluator, and tests. DNS A/AAAA resolution
+is not yet implemented. Outbound transport is not yet implemented. Production-provider egress
+review remains required before production deployment.
+
+This deliverable does not implement Phase 3C, a queue, worker, scanner, or public target route.
+The future canonical resolver algorithm and positive IPv4/IPv6 policy design are in the
 [Phase 3 architecture proposal](./phase-3-architecture.md#dns-aaaa-resolution-proposal) and
 [IP-policy section](./phase-3-architecture.md#explicit-ipv4ipv6-policy). HTTP/HTTPS transport,
-security acceptance, and infrastructure-egress review remain unimplemented prerequisites. These
-proposals do not alter Phase 2 scan-record permissions. Challenge issuance and verification rate
-limits remain prerequisites before exposing target API routes.
+socket execution, security acceptance, and infrastructure-egress review remain unimplemented
+prerequisites. These proposals do not alter Phase 2 scan-record permissions. Challenge issuance
+and verification rate limits remain prerequisites before exposing target API routes.
 
 ### Authorization transaction and concurrency protocol (implemented; PostgreSQL integration tests)
 

@@ -11,15 +11,20 @@ Phase 3B.1 hostname canonicalization is implemented and pending final acceptance
 resolution, HTTP scanning, queues, workers, result APIs, UI, and production egress controls remain
 unimplemented; this is not a production-readiness claim.
 
-**PROPOSED — NOT IMPLEMENTED: Phase 3B.4 DNS address resolution and outbound network security.**
-The section below is an architecture proposal for assessment and approval only. It adds no resolver,
-transport, route, queue, scanner, worker, or execution behavior. No production source code or
-configuration in this repository implements it. This proposed A/AAAA policy is separate from the
-implemented Phase 3B.3 TXT lookup: it does not change the TXT resolver's existing per-query
-configured-nameserver behavior or its handling of dnspython transport/parsing exceptions.
-The canonical resolver algorithm and positive IP-policy approval blocker are specified in the
-[DNS A/AAAA resolution proposal](#dns-aaaa-resolution-proposal) and
-[Explicit IPv4/IPv6 policy](#explicit-ipv4ipv6-policy) sections below.
+**Policy v1 approved and implementation authorized on 2026-11-24.**
+The project owner approved IP Destination Policy v1 on `2026-11-24`. The first implementation
+deliverable now exists: authoritative IANA CSV snapshots, a versioned normalized policy artifact,
+a pure address-classification module, and tests. This is not an implementation of DNS A/AAAA
+resolution or outbound execution.
+
+**Not yet implemented:** DNS A/AAAA resolution, socket connections, outbound HTTP/TLS, public
+target routes, scanner execution, queue/worker functionality, and production deployment
+configuration. The DNS A/AAAA and outbound sections below remain future implementation proposals
+separate from the implemented Phase 3B.3 TXT lookup. They do not change TXT resolver
+configured-nameserver behavior or dnspython exception handling. Production-provider egress review
+is still required before production deployment. The canonical future resolver algorithm and
+transport design remain specified in the [DNS A/AAAA resolution proposal](#dns-aaaa-resolution-proposal)
+and [Explicit IPv4/IPv6 policy](#explicit-ipv4ipv6-policy) sections below.
 
 The design preserves the Phase 2 identity, tenancy, authorization, audit, lifecycle, and scan-record
 foundations. It keeps the backend a modular monolith, adds a separately run Python worker, uses
