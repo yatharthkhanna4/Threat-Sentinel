@@ -690,6 +690,42 @@ def test_udp_transport_failure_restarts_on_next_nameserver_without_combining() -
     assert result.ipv4_addresses[0].address == "8.8.8.8"
 
 
+def test_retry_with_unexpired_external_deadline_restarts_complete_attempt() -> None:
+    now = [100.0]
+    calls: list[tuple[str, dns.rdatatype.RdataType]] = []
+
+    def respond(
+        request: dns.message.Message,
+        nameserver: str,
+        tcp: bool,
+    ) -> dns.message.Message:
+        del tcp
+        record_type = request.question[0].rdtype
+        calls.append((nameserver, record_type))
+        if nameserver == "192.0.2.53" and record_type == dns.rdatatype.AAAA:
+            raise DNSAddressTransportError()
+        if nameserver == "192.0.2.53":
+            return answer(request, "A", "8.8.8.8")
+        if record_type == dns.rdatatype.A:
+            return answer(request, "A", "1.1.1.1")
+        return answer(request, "AAAA", "2606:4700:4700::1111")
+
+    transport = FixtureTransport(("192.0.2.53", "192.0.2.54"), respond)
+    result = DNSAddressResolver(
+        transport=transport,
+        monotonic=lambda: now[0],
+    ).resolve("example.com", overall_deadline=109.0)
+
+    assert calls == [
+        ("192.0.2.53", dns.rdatatype.A),
+        ("192.0.2.53", dns.rdatatype.AAAA),
+        ("192.0.2.54", dns.rdatatype.A),
+        ("192.0.2.54", dns.rdatatype.AAAA),
+    ]
+    assert result.ipv4_addresses[0].address == "1.1.1.1"
+    assert result.ipv6_addresses[0].address == "2606:4700:4700::1111"
+
+
 @pytest.mark.parametrize(
     "address",
     [
@@ -963,6 +999,139 @@ def test_query_deadlines_are_bounded_by_original_overall_deadline() -> None:
         for start, deadline in zip(query_starts, transport.deadlines, strict=True)
     )
     assert all(deadline <= 110.0 for deadline in transport.deadlines)
+
+
+def test_expired_external_deadline_starts_no_dns_queries() -> None:
+    now = [100.0]
+    transport = FixtureTransport(
+        ("192.0.2.53",),
+        dual_responder(),
+    )
+
+    with pytest.raises(DNSAddressResolutionError):
+        DNSAddressResolver(
+            transport=transport,
+            monotonic=lambda: now[0],
+        ).resolve("example.com", overall_deadline=99.0)
+
+    assert transport.requests == []
+
+
+@pytest.mark.parametrize("deadline", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_external_deadline_is_rejected_without_queries(
+    deadline: float,
+) -> None:
+    transport = FixtureTransport(("192.0.2.53",), dual_responder())
+
+    with pytest.raises(DNSAddressResolutionError):
+        DNSAddressResolver(transport=transport).resolve(
+            "example.com",
+            overall_deadline=deadline,
+        )
+
+    assert transport.requests == []
+
+
+def test_external_deadline_caps_query_deadlines_and_preserves_query_limit() -> None:
+    now = [100.0]
+    query_starts: list[float] = []
+    answer_query = dual_responder()
+
+    def respond(
+        request: dns.message.Message,
+        nameserver: str,
+        tcp: bool,
+    ) -> dns.message.Message:
+        query_starts.append(now[0])
+        response = answer_query(request, nameserver, tcp)
+        now[0] += 2.75 if len(query_starts) == 1 else 0.1
+        return response
+
+    transport = FixtureTransport(("192.0.2.53",), respond)
+    result = DNSAddressResolver(
+        transport=transport,
+        monotonic=lambda: now[0],
+    ).resolve("example.com", overall_deadline=105.5)
+
+    assert result.ipv4_addresses[0].address == "8.8.8.8"
+    assert query_starts == [100.0, 102.75]
+    assert transport.deadlines == [103.0, 105.5]
+    assert all(
+        deadline <= min(start + 3.0, 105.5)
+        for start, deadline in zip(query_starts, transport.deadlines, strict=True)
+    )
+
+
+def test_transport_failure_after_external_deadline_does_not_fallback() -> None:
+    now = [100.0]
+
+    def respond(
+        request: dns.message.Message,
+        nameserver: str,
+        tcp: bool,
+    ) -> dns.message.Message:
+        del request, tcp
+        assert nameserver == "192.0.2.53"
+        now[0] = 105.01
+        raise DNSAddressTransportError()
+
+    transport = FixtureTransport(("192.0.2.53", "192.0.2.54"), respond)
+    with pytest.raises(DNSAddressResolutionError):
+        DNSAddressResolver(
+            transport=transport,
+            monotonic=lambda: now[0],
+        ).resolve("example.com", overall_deadline=105.0)
+
+    assert [nameserver for _, nameserver, _ in transport.requests] == ["192.0.2.53"]
+
+
+def test_late_successful_response_after_external_deadline_is_rejected() -> None:
+    now = [100.0]
+
+    def respond(
+        request: dns.message.Message,
+        nameserver: str,
+        tcp: bool,
+    ) -> dns.message.Message:
+        del nameserver, tcp
+        now[0] = 105.01
+        record_type = request.question[0].rdtype
+        return answer(
+            request,
+            "A" if record_type == dns.rdatatype.A else "AAAA",
+            "8.8.8.8" if record_type == dns.rdatatype.A else "2001:4860:4860::8888",
+        )
+
+    transport = FixtureTransport(("192.0.2.53", "192.0.2.54"), respond)
+    with pytest.raises(DNSAddressResolutionError):
+        DNSAddressResolver(
+            transport=transport,
+            monotonic=lambda: now[0],
+        ).resolve("example.com", overall_deadline=105.0)
+
+    assert [nameserver for _, nameserver, _ in transport.requests] == ["192.0.2.53"]
+
+
+def test_resolution_finishing_after_external_deadline_is_rejected() -> None:
+    now = [100.0]
+    wall_clock_calls = 0
+
+    def wall_clock() -> datetime:
+        nonlocal wall_clock_calls
+        wall_clock_calls += 1
+        if wall_clock_calls == 2:
+            now[0] = 105.01
+        return datetime(2026, 11, 24, tzinfo=UTC)
+
+    transport = FixtureTransport(("192.0.2.53",), dual_responder())
+    with pytest.raises(DNSAddressResolutionError):
+        DNSAddressResolver(
+            transport=transport,
+            monotonic=lambda: now[0],
+            wall_clock=wall_clock,
+        ).resolve("example.com", overall_deadline=105.0)
+
+    assert len(transport.requests) == 2
 
 
 def test_response_returned_after_query_deadline_is_rejected() -> None:

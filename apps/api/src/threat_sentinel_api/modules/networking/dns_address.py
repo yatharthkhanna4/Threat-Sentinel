@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import ipaddress
+import math
 import time
 from typing import Callable, Protocol
 
@@ -138,8 +139,25 @@ class DNSAddressResolver:
         self._monotonic = monotonic
         self._wall_clock = wall_clock
 
-    def resolve(self, hostname: str) -> ValidatedResolution:
+    def resolve(
+        self,
+        hostname: str,
+        *,
+        overall_deadline: float | None = None,
+    ) -> ValidatedResolution:
         try:
+            if overall_deadline is not None:
+                if isinstance(overall_deadline, bool) or not isinstance(
+                    overall_deadline, (float, int)
+                ):
+                    raise DNSAddressResolutionError()
+                try:
+                    overall_deadline = float(overall_deadline)
+                except OverflowError:
+                    raise DNSAddressResolutionError() from None
+                if not math.isfinite(overall_deadline):
+                    raise DNSAddressResolutionError()
+
             canonical = canonicalize_hostname(hostname)
             nameservers = (
                 self._nameservers
@@ -151,22 +169,29 @@ class DNSAddressResolver:
             validated_nameservers = self._validate_nameservers(nameservers)
 
             start_monotonic = self._monotonic()
-            overall_deadline = start_monotonic + DNS_RESOLUTION_DEADLINE_SECONDS
+            dns_deadline = start_monotonic + DNS_RESOLUTION_DEADLINE_SECONDS
+            effective_deadline = (
+                min(dns_deadline, overall_deadline)
+                if overall_deadline is not None
+                else dns_deadline
+            )
             resolved_wall_start = self._wall_clock()
             total_deadline_wall = resolved_wall_start + timedelta(
                 seconds=DNS_RESOLUTION_DEADLINE_SECONDS
             )
 
             for nameserver in validated_nameservers:
-                if self._monotonic() >= overall_deadline:
+                if self._monotonic() >= effective_deadline:
                     raise DNSAddressResolutionError()
                 try:
                     a_result, aaaa_result = self._resolve_attempt(
                         canonical,
                         nameserver,
-                        overall_deadline,
+                        effective_deadline,
                     )
                 except DNSAddressTransportError:
+                    if self._monotonic() >= effective_deadline:
+                        raise DNSAddressResolutionError() from None
                     continue
 
                 if (
@@ -185,7 +210,7 @@ class DNSAddressResolver:
                 if len(ipv4) + len(ipv6) > MAX_TERMINAL_ADDRESSES:
                     raise DNSAddressResolutionError()
 
-                return ValidatedResolution(
+                resolution = ValidatedResolution(
                     hostname=canonical,
                     ipv4_addresses=tuple(ipv4),
                     ipv6_addresses=tuple(ipv6),
@@ -196,6 +221,9 @@ class DNSAddressResolver:
                     policy_version=POLICY_VERSION,
                     family_results=(a_result, aaaa_result),
                 )
+                if self._monotonic() >= effective_deadline:
+                    raise DNSAddressResolutionError()
+                return resolution
             raise DNSAddressResolutionError()
         except DNSAddressResolutionError:
             raise

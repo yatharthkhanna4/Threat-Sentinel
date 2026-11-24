@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import socket
 import ssl
 import time
@@ -21,10 +22,14 @@ from threat_sentinel_api.modules.networking.ip_policy import (
     load_ip_policy,
 )
 from threat_sentinel_api.modules.networking.pinned_http import (
+    PinnedHttpError,
+    PinnedHttpResponse,
     PinnedHttpTransport,
     ScanBudget,
+    TransportFailure,
 )
 from threat_sentinel_api.modules.networking.types import (
+    AddressFamily,
     CanonicalAddress,
     ValidatedResolution,
 )
@@ -38,14 +43,27 @@ _NAMESERVER = "192.0.2.53"
 _HTTP_RESPONSE = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
 
 
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 class _FixtureDnsTransport:
     def __init__(
         self,
         ipv4_answers: tuple[str, ...] = (_INITIAL_ADDRESS,),
         rebound_address: str | None = None,
+        on_query: Callable[[], None] | None = None,
     ) -> None:
         self._ipv4_answers = ipv4_answers
         self._rebound_address = rebound_address
+        self._on_query = on_query
         self._a_query_count = 0
         self.queries: list[tuple[str, dns.rdatatype.RdataType, bool]] = []
 
@@ -63,6 +81,8 @@ class _FixtureDnsTransport:
         del deadline
         question = request.question[0]
         self.queries.append((nameserver, question.rdtype, tcp))
+        if self._on_query is not None:
+            self._on_query()
         response = dns.message.make_response(request)
         if question.rdtype == dns.rdatatype.A:
             self._a_query_count += 1
@@ -86,11 +106,19 @@ class _FixtureDnsTransport:
 
 
 class _FakeSocket:
-    def __init__(self, response: bytes, certificate_hostname: str) -> None:
+    def __init__(
+        self,
+        response: bytes,
+        certificate_hostname: str,
+        clock: _FakeClock | None = None,
+        connect_delay: float = 0.0,
+    ) -> None:
         self.connected_to: tuple[object, ...] | None = None
         self.request = bytearray()
         self._response = response
         self.certificate_hostname = certificate_hostname
+        self._clock = clock
+        self._connect_delay = connect_delay
         self.server_name_indication: str | None = None
         self.verification_hostname: str | None = None
         self.verification_enabled: bool | None = None
@@ -98,6 +126,8 @@ class _FakeSocket:
 
     def connect(self, address: tuple[object, ...]) -> None:
         self.connected_to = address
+        if self._clock is not None:
+            self._clock.advance(self._connect_delay)
 
     def settimeout(self, _timeout: float) -> None:
         pass
@@ -123,13 +153,41 @@ class _BoundaryPinnedHttpTransport(PinnedHttpTransport):
         *,
         response: bytes = _HTTP_RESPONSE,
         certificate_hostname: str = _CANONICAL_HOSTNAME,
+        clock: _FakeClock | None = None,
+        connect_delay: float = 0.0,
     ) -> None:
         self._response = response
         self._certificate_hostname = certificate_hostname
+        self._clock = clock
+        self._connect_delay = connect_delay
         self.sockets: list[_FakeSocket] = []
+        self.budgets: list[ScanBudget] = []
+
+    def request(
+        self,
+        resolution: ValidatedResolution,
+        *,
+        scheme: str,
+        method: str,
+        budget: ScanBudget,
+        address_family: AddressFamily | str | None = None,
+    ) -> PinnedHttpResponse:
+        self.budgets.append(budget)
+        return super().request(
+            resolution,
+            scheme=scheme,
+            method=method,
+            budget=budget,
+            address_family=address_family,
+        )
 
     def _new_socket(self, _address: CanonicalAddress) -> socket.socket:
-        fake_socket = _FakeSocket(self._response, self._certificate_hostname)
+        fake_socket = _FakeSocket(
+            self._response,
+            self._certificate_hostname,
+            self._clock,
+            self._connect_delay,
+        )
         self.sockets.append(fake_socket)
         return cast(socket.socket, fake_socket)
 
@@ -286,16 +344,14 @@ def test_budget_created_before_resolution_is_reused_across_transport_requests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _forbid_system_dns(monkeypatch)
-    # DNS does not currently accept or enforce this budget. The budget is created before
-    # resolution and reused by both HTTP requests, so this verifies shared HTTP request
-    # accounting and elapsed-budget observation, not DNS deadline enforcement.
     budget = ScanBudget(time.monotonic() + 120.0)
     elapsed_before_resolution = budget.usage().elapsed_seconds
     dns_transport = _FixtureDnsTransport()
-    resolution = _resolve(
-        dns_transport,
+    resolution = DNSAddressResolver(transport=dns_transport).resolve(
         canonicalize_hostname("Example.COM."),
+        overall_deadline=budget.deadline,
     )
+    assert type(resolution) is ValidatedResolution
     elapsed_after_resolution = budget.usage().elapsed_seconds
     http_transport = _BoundaryPinnedHttpTransport()
 
@@ -319,3 +375,77 @@ def test_budget_created_before_resolution_is_reused_across_transport_requests(
     assert budget.usage().elapsed_seconds >= elapsed_after_resolution
     assert len(http_transport.sockets) == 2
     assert all(sock.closed for sock in http_transport.sockets)
+
+
+def test_dns_consumes_original_budget_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_system_dns(monkeypatch)
+    clock = _FakeClock()
+    monkeypatch.setattr(time, "monotonic", clock)
+    budget = ScanBudget(clock() + 3.0)
+    original_deadline = budget.deadline
+    dns_transport = _FixtureDnsTransport(on_query=lambda: clock.advance(0.4))
+
+    resolution = DNSAddressResolver(
+        transport=dns_transport,
+        monotonic=clock,
+    ).resolve(
+        _CANONICAL_HOSTNAME,
+        overall_deadline=budget.deadline,
+    )
+    assert type(resolution) is ValidatedResolution
+    assert len(dns_transport.queries) == 2
+    assert clock() < original_deadline
+
+    http_transport = _BoundaryPinnedHttpTransport(
+        clock=clock,
+        connect_delay=2.3,
+    )
+    with pytest.raises(PinnedHttpError) as error:
+        http_transport.request(
+            resolution,
+            scheme="http",
+            method="GET",
+            budget=budget,
+        )
+
+    assert error.value.failure is TransportFailure.REQUEST_DEADLINE_EXHAUSTED
+    assert clock() >= original_deadline
+    assert budget.deadline == original_deadline
+    assert http_transport.budgets == [budget]
+    assert budget.usage().requests == 1
+    assert len(http_transport.sockets) == 1
+    assert http_transport.sockets[0].closed
+
+
+def test_dns_exhausting_original_budget_prevents_http_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_system_dns(monkeypatch)
+    clock = _FakeClock()
+    monkeypatch.setattr(time, "monotonic", clock)
+    budget = ScanBudget(clock() + 0.5)
+    dns_transport = _FixtureDnsTransport(on_query=lambda: clock.advance(0.6))
+    http_transport = _BoundaryPinnedHttpTransport(clock=clock)
+
+    with pytest.raises(DNSAddressResolutionError):
+        resolution = DNSAddressResolver(
+            transport=dns_transport,
+            monotonic=clock,
+        ).resolve(
+            _CANONICAL_HOSTNAME,
+            overall_deadline=budget.deadline,
+        )
+        http_transport.request(
+            resolution,
+            scheme="http",
+            method="GET",
+            budget=budget,
+        )
+
+    assert clock() >= budget.deadline
+    assert len(dns_transport.queries) == 1
+    assert http_transport.budgets == []
+    assert http_transport.sockets == []
+    assert budget.usage().requests == 0
