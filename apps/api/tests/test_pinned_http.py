@@ -316,9 +316,7 @@ def test_proxy_environment_is_ignored_and_request_is_fixed(
         "no_proxy",
     ):
         monkeypatch.setenv(name, "http://127.0.0.1:8888")
-    result, request, connected, _ = _exchange(
-        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
-    )
+    result, request, connected, _ = _exchange(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
 
     assert request == (
         b"GET / HTTP/1.1\r\n"
@@ -398,9 +396,7 @@ def test_rejects_raw_destination_and_caller_supplied_request_body() -> None:
 
 def test_redirect_is_observed_and_never_followed() -> None:
     result, request, _, _ = _exchange(
-        b"HTTP/1.1 302 Found\r\n"
-        b"Location: https://other.example/path\r\n"
-        b"Content-Length: 0\r\n\r\n"
+        b"HTTP/1.1 302 Found\r\nLocation: https://other.example/path\r\nContent-Length: 0\r\n\r\n"
     )
     assert result.is_redirect
     assert result.redirect_location == "https://other.example/path"
@@ -410,10 +406,7 @@ def test_redirect_is_observed_and_never_followed() -> None:
 
 def test_duplicate_non_framing_headers_remain_distinct_metadata() -> None:
     response, _, _, _ = _exchange(
-        b"HTTP/1.1 200 OK\r\n"
-        b"X-Repeat: first\r\n"
-        b"X-Repeat: second\r\n"
-        b"Content-Length: 0\r\n\r\n"
+        b"HTTP/1.1 200 OK\r\nX-Repeat: first\r\nX-Repeat: second\r\nContent-Length: 0\r\n\r\n"
     )
     assert response.headers == (
         HttpHeader("x-repeat", "first"),
@@ -535,10 +528,7 @@ def test_rejects_invalid_status_and_header_syntax(response: bytes) -> None:
 
 def test_identity_content_encoding_is_returned_without_decompression() -> None:
     response, _, _, _ = _exchange(
-        b"HTTP/1.1 200 OK\r\n"
-        b"Content-Encoding: identity\r\n"
-        b"Content-Length: 3\r\n\r\n"
-        b"abc"
+        b"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Length: 3\r\n\r\nabc"
     )
     assert response.body == b"abc"
     assert response.headers[0] == HttpHeader("content-encoding", "identity")
@@ -555,9 +545,7 @@ def test_parses_chunked_response_and_keeps_trailers_separate() -> None:
         b"X-Checksum: yes\r\n"
         b"\r\n"
     )
-    response, _, _, _ = _exchange(
-        payload
-    )
+    response, _, _, _ = _exchange(payload)
     assert response.body == b"Wikipedia"
     assert response.trailers == (HttpHeader("x-checksum", "yes"),)
     assert response.encoded_body_bytes == 9
@@ -579,18 +567,13 @@ def test_parses_chunked_response_and_keeps_trailers_separate() -> None:
     ],
 )
 def test_rejects_malformed_chunking_or_trailer_override(chunked_body: bytes) -> None:
-    response = (
-        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" + chunked_body
-    )
+    response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" + chunked_body
     with pytest.raises(InvalidHttpResponse):
         _exchange(response)
 
 
 def test_response_body_is_not_exposed_after_parse_failure() -> None:
-    response = (
-        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbody"
-        b"HTTP/1.1 200 OK\r\n"
-    )
+    response = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbodyHTTP/1.1 200 OK\r\n"
     with pytest.raises(InvalidHttpResponse) as error:
         _exchange(response)
     assert not hasattr(error.value, "body")
@@ -617,9 +600,7 @@ def test_no_body_semantics_for_head_informational_204_205_and_304() -> None:
     )
     no_content, _, _, _ = _exchange(b"HTTP/1.1 204 No Content\r\n\r\n")
     reset, _, _, _ = _exchange(b"HTTP/1.1 205 Reset Content\r\nContent-Length: 0\r\n\r\n")
-    not_modified, _, _, _ = _exchange(
-        b"HTTP/1.1 304 Not Modified\r\nContent-Length: 3\r\n\r\n"
-    )
+    not_modified, _, _, _ = _exchange(b"HTTP/1.1 304 Not Modified\r\nContent-Length: 3\r\n\r\n")
 
     assert head.body == b""
     assert informational.status_code == 200
@@ -653,9 +634,7 @@ def test_response_header_line_and_aggregate_boundaries() -> None:
     assert exact.body == b""
     over_line_value = b"a" * (8193 - len(b"X: \r\n"))
     with pytest.raises(PinnedHttpError):
-        _exchange(
-            _header_response([b"Content-Length: 0\r\n", b"X: " + over_line_value + b"\r\n"])
-        )
+        _exchange(_header_response([b"Content-Length: 0\r\n", b"X: " + over_line_value + b"\r\n"]))
 
     prefix = b"HTTP/1.1 200 OK\r\n"
     content_length = b"Content-Length: 0\r\n"
@@ -725,11 +704,7 @@ def test_cumulative_scan_budget_rejects_requests_and_identity_bytes() -> None:
 
 def test_per_response_transferred_bytes_are_limited() -> None:
     chunks = b"1\r\nx\r\n" * 350_000
-    response = (
-        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
-        + chunks
-        + b"0\r\n\r\n"
-    )
+    response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" + chunks + b"0\r\n\r\n"
     with pytest.raises(PinnedHttpError) as error:
         _exchange(response)
     assert error.value.failure is TransportFailure.RESPONSE_LIMIT_EXCEEDED
@@ -940,16 +915,13 @@ def test_cumulative_transfer_limit_rejects_later_parsed_response_without_returni
     successful_body = b"x" * MAX_ENCODED_BODY_BYTES
     failed_body = b"y" * MAX_ENCODED_BODY_BYTES
     response_prefix = (
-        b"HTTP/1.1 200 OK\r\nContent-Length: "
-        + str(MAX_ENCODED_BODY_BYTES).encode()
-        + b"\r\n\r\n"
+        b"HTTP/1.1 200 OK\r\nContent-Length: " + str(MAX_ENCODED_BODY_BYTES).encode() + b"\r\n\r\n"
     )
     successful_response = response_prefix + successful_body
     failed_response = response_prefix + failed_body
     transport, _, budget = _fake_socket_pool_transport(
         monkeypatch,
-        [[(successful_response, 0.0)] for _ in range(4)]
-        + [[(failed_response, 0.0)]],
+        [[(successful_response, 0.0)] for _ in range(4)] + [[(failed_response, 0.0)]],
     )
 
     successful_results = [
@@ -968,18 +940,12 @@ def test_cumulative_transfer_limit_rejects_later_parsed_response_without_returni
         result.response_transferred_bytes for result in successful_results
     )
     assert successful_usage.identity_bytes == 4 * MAX_ENCODED_BODY_BYTES
-    assert all(
-        result.encoded_body_bytes == MAX_ENCODED_BODY_BYTES
-        for result in successful_results
-    )
+    assert all(result.encoded_body_bytes == MAX_ENCODED_BODY_BYTES for result in successful_results)
     assert all(
         result.response_transferred_bytes <= MAX_RESPONSE_TRANSFERRED_BYTES
         for result in successful_results
     )
-    assert (
-        successful_usage.transferred_bytes + len(failed_response)
-        > MAX_SCAN_TRANSFERRED_BYTES
-    )
+    assert successful_usage.transferred_bytes + len(failed_response) > MAX_SCAN_TRANSFERRED_BYTES
 
     with pytest.raises(PinnedHttpError) as error:
         transport.request(
@@ -1152,10 +1118,7 @@ def test_first_byte_and_read_inactivity_deadlines_reject_late_data(
     )
     with pytest.raises(PinnedHttpError) as inactivity_error:
         inactivity.get(_resolution(), scheme="http", budget=inactivity_budget)
-    assert (
-        inactivity_error.value.failure
-        is TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT
-    )
+    assert inactivity_error.value.failure is TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT
 
 
 def test_total_request_deadline_overrides_phase_and_rejects_late_body(
@@ -1179,9 +1142,7 @@ def test_total_request_deadline_overrides_phase_and_rejects_late_body(
     )
     with pytest.raises(PinnedHttpError) as body_error:
         body.get(_resolution(), scheme="http", budget=body_budget)
-    assert (
-        body_error.value.failure is TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT
-    )
+    assert body_error.value.failure is TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT
 
 
 def test_non_http11_alpn_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

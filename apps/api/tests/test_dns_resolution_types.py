@@ -407,8 +407,7 @@ def test_terminal_address_limit_is_enforced_per_answer_set() -> None:
     with pytest.raises(DNSResolutionError, match="too_many_terminal_addresses"):
         valid_resolution(
             ipv4_addresses=[
-                f"8.8.{index // 256}.{index % 256}"
-                for index in range(MAX_TERMINAL_ADDRESSES + 1)
+                f"8.8.{index // 256}.{index % 256}" for index in range(MAX_TERMINAL_ADDRESSES + 1)
             ]
         )
 

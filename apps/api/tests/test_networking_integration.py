@@ -203,10 +203,7 @@ class _BoundaryPinnedHttpTransport(PinnedHttpTransport):
         fake_socket.verification_enabled = (
             context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
         )
-        if (
-            not fake_socket.verification_enabled
-            or fake_socket.certificate_hostname != hostname
-        ):
+        if not fake_socket.verification_enabled or fake_socket.certificate_hostname != hostname:
             raise ssl.SSLCertVerificationError("fixture certificate hostname mismatch")
         return cast(ssl.SSLSocket, connection)
 

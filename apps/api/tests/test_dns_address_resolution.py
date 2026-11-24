@@ -130,11 +130,7 @@ def dual_responder(
         del nameserver, tcp
         if request.question[0].rdtype == dns.rdatatype.A:
             return answer(request, "A", *a_addresses) if a_addresses else nodata(request)
-        return (
-            answer(request, "AAAA", *aaaa_addresses)
-            if aaaa_addresses
-            else nodata(request)
-        )
+        return answer(request, "AAAA", *aaaa_addresses) if aaaa_addresses else nodata(request)
 
     return respond
 
@@ -322,9 +318,7 @@ def test_cname_chain_at_configured_limit_is_resolved() -> None:
             for index in range(MAX_CNAME_LINKS - 1)
         ],
     ]
-    expected_owners = [owner for owner, _ in expected_links] + [
-        expected_links[-1][1]
-    ]
+    expected_owners = [owner for owner, _ in expected_links] + [expected_links[-1][1]]
     transport = FixtureTransport(
         ("192.0.2.53",),
         _sequential_cname_responder(MAX_CNAME_LINKS, queries, links),
@@ -361,10 +355,7 @@ def test_cname_chain_one_over_configured_limit_fails_with_distinct_links() -> No
 
     assert links == expected_links
     assert len({owner for owner, _ in links}) == MAX_CNAME_LINKS + 1
-    assert queries == [
-        (owner, dns.rdatatype.A)
-        for owner, _ in expected_links
-    ]
+    assert queries == [(owner, dns.rdatatype.A) for owner, _ in expected_links]
 
 
 def test_different_cname_chains_across_families_fail() -> None:
@@ -494,9 +485,7 @@ def test_aaaa_transport_failure_restarts_complete_dual_stack_attempt(
         ("192.0.2.54", dns.rdatatype.AAAA),
     ]
     assert tuple(address.address for address in result.ipv4_addresses) == ("1.1.1.1",)
-    assert tuple(address.address for address in result.ipv6_addresses) == (
-        "2606:4700:4700::1111",
-    )
+    assert tuple(address.address for address in result.ipv6_addresses) == ("2606:4700:4700::1111",)
     assert result.a_family.addresses == result.ipv4_addresses
     assert result.aaaa_family.addresses == result.ipv6_addresses
 
@@ -805,14 +794,9 @@ def _response_with_txt_padding(
     payload_size: int,
 ) -> dns.message.Message:
     response = answer(request, "A", "8.8.8.8")
-    parts = [
-        "a" * min(255, payload_size - offset)
-        for offset in range(0, payload_size, 255)
-    ]
+    parts = ["a" * min(255, payload_size - offset) for offset in range(0, payload_size, 255)]
     text = " ".join(f'"{part}"' for part in parts)
-    response.additional.append(
-        dns.rrset.from_text("padding.example.", 60, "IN", "TXT", text)
-    )
+    response.additional.append(dns.rrset.from_text("padding.example.", 60, "IN", "TXT", text))
     return response
 
 
@@ -944,6 +928,7 @@ def test_record_count_accepts_128_records() -> None:
         return response
 
     transport = FixtureTransport(("192.0.2.53",), many_records)
+
     def aaaa_nodata(
         request: dns.message.Message,
         nameserver: str,

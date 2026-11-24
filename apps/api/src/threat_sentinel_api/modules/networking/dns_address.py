@@ -338,15 +338,9 @@ class DNSAddressResolver:
                 raise DNSAddressResolutionError()
 
             cname_rrsets = [
-                rrset
-                for rrset in current_answer
-                if rrset.rdtype == dns.rdatatype.CNAME
+                rrset for rrset in current_answer if rrset.rdtype == dns.rdatatype.CNAME
             ]
-            address_rrsets = [
-                rrset
-                for rrset in current_answer
-                if rrset.rdtype == record_type
-            ]
+            address_rrsets = [rrset for rrset in current_answer if rrset.rdtype == record_type]
 
             if cname_rrsets:
                 if len(cname_rrsets) != 1 or len(address_rrsets) or len(cname_rrsets[0]) != 1:
@@ -485,7 +479,8 @@ class DNSAddressResolver:
             response.id != request.id
             or not response.flags & dns.flags.QR
             or response.opcode() != dns.opcode.QUERY
-            or response.rcode() not in {
+            or response.rcode()
+            not in {
                 dns.rcode.NOERROR,
                 dns.rcode.NXDOMAIN,
                 dns.rcode.SERVFAIL,
@@ -498,8 +493,7 @@ class DNSAddressResolver:
         response_question = response.question[0]
         request_question = request.question[0]
         if (
-            response_question.name.canonicalize()
-            != request_question.name.canonicalize()
+            response_question.name.canonicalize() != request_question.name.canonicalize()
             or response_question.rdtype != request_question.rdtype
             or response_question.rdclass != request_question.rdclass
         ):
@@ -511,8 +505,6 @@ class DNSAddressResolver:
             raise DNSAddressResolutionError()
         canonical = name.canonicalize().to_text()
         try:
-            return canonicalize_hostname(
-                canonical[:-1] if canonical.endswith(".") else canonical
-            )
+            return canonicalize_hostname(canonical[:-1] if canonical.endswith(".") else canonical)
         except ValueError:
             raise DNSAddressResolutionError() from None

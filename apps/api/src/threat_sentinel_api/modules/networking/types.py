@@ -324,9 +324,7 @@ class ValidatedResolution:
 
         links = _normalize_cname_chain(cname_chain)
         canonical_terminal = (
-            canonical_hostname
-            if terminal_owner is None
-            else _canonical_hostname(terminal_owner)
+            canonical_hostname if terminal_owner is None else _canonical_hostname(terminal_owner)
         )
         if links:
             if links[0].owner != canonical_hostname:

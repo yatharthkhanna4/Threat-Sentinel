@@ -41,10 +41,7 @@ MAX_SCAN_IDENTITY_BYTES: Final = 5 * 1024 * 1024
 MAX_SCAN_REQUESTS: Final = 20
 
 _HEADER_TOKEN: Final = frozenset(
-    b"!#$%&'*+-.^_`|~"
-    b"0123456789"
-    b"abcdefghijklmnopqrstuvwxyz"
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    b"!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 )
 _TRAILER_FORBIDDEN: Final = frozenset(
     {
@@ -322,13 +319,9 @@ class _ResponseReader:
         except (socket.timeout, TimeoutError):
             if time.monotonic() >= self._request_deadline:
                 raise _DeadlineExpired() from None
-            raise PinnedHttpError(
-                TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT
-            ) from None
+            raise PinnedHttpError(TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT) from None
         except OSError:
-            raise PinnedHttpError(
-                TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT
-            ) from None
+            raise PinnedHttpError(TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT) from None
         if time.monotonic() >= phase_deadline:
             if time.monotonic() >= self._request_deadline:
                 raise _DeadlineExpired()
@@ -427,9 +420,7 @@ class PinnedHttpTransport:
             try:
                 raw_socket = self._new_socket(selected_address)
             except OSError:
-                raise PinnedHttpError(
-                    TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT
-                ) from None
+                raise PinnedHttpError(TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT) from None
             active_socket = raw_socket
             connect_deadline = min(
                 started + TCP_CONNECT_TIMEOUT_SECONDS,
@@ -441,13 +432,9 @@ class PinnedHttpTransport:
             except (socket.timeout, TimeoutError):
                 if time.monotonic() >= request_deadline:
                     raise _DeadlineExpired() from None
-                raise PinnedHttpError(
-                    TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT
-                ) from None
+                raise PinnedHttpError(TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT) from None
             except OSError:
-                raise PinnedHttpError(
-                    TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT
-                ) from None
+                raise PinnedHttpError(TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT) from None
             self._check_late(connect_deadline, request_deadline)
             connected = time.monotonic()
 
@@ -467,9 +454,7 @@ class PinnedHttpTransport:
                 except PinnedHttpError:
                     raise
                 except (OSError, ssl.SSLError, NotImplementedError):
-                    raise PinnedHttpError(
-                        TransportFailure.TLS_VERIFICATION_FAILED
-                    ) from None
+                    raise PinnedHttpError(TransportFailure.TLS_VERIFICATION_FAILED) from None
                 self._set_timeout(raw_socket, tls_deadline, request_deadline)
                 try:
                     tls_socket = self._wrap_tls(
@@ -480,9 +465,7 @@ class PinnedHttpTransport:
                 except (ssl.SSLError, OSError, TimeoutError):
                     if time.monotonic() >= request_deadline:
                         raise _DeadlineExpired() from None
-                    raise PinnedHttpError(
-                        TransportFailure.TLS_VERIFICATION_FAILED
-                    ) from None
+                    raise PinnedHttpError(TransportFailure.TLS_VERIFICATION_FAILED) from None
                 active_socket = tls_socket
                 self._check_late(tls_deadline, request_deadline)
                 if tls_socket.selected_alpn_protocol() != "http/1.1":
@@ -502,13 +485,9 @@ class PinnedHttpTransport:
             except (socket.timeout, TimeoutError):
                 if time.monotonic() >= request_deadline:
                     raise _DeadlineExpired() from None
-                raise PinnedHttpError(
-                    TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT
-                ) from None
+                raise PinnedHttpError(TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT) from None
             except OSError:
-                raise PinnedHttpError(
-                    TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT
-                ) from None
+                raise PinnedHttpError(TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT) from None
             self._check_late(request_deadline, request_deadline)
 
             response_started = time.monotonic()
@@ -624,9 +603,7 @@ class PinnedHttpTransport:
         try:
             connection.close()
         except OSError:
-            raise PinnedHttpError(
-                TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT
-            ) from None
+            raise PinnedHttpError(TransportFailure.CONNECTION_REFUSED_OR_TIMED_OUT) from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -785,9 +762,7 @@ def _read_chunked_body(
     while True:
         size_line = reader.read_line()
         size_text = size_line[:-2]
-        if not size_text or any(
-            byte not in b"0123456789abcdefABCDEF" for byte in size_text
-        ):
+        if not size_text or any(byte not in b"0123456789abcdefABCDEF" for byte in size_text):
             raise InvalidHttpResponse()
         if len(size_text) > 16:
             raise InvalidHttpResponse()
@@ -885,9 +860,7 @@ def _select_address(
         except (TypeError, ValueError):
             raise ValueError("unsupported_address_family") from None
         candidates = (
-            resolution.ipv4_addresses
-            if family is AddressFamily.IPV4
-            else resolution.ipv6_addresses
+            resolution.ipv4_addresses if family is AddressFamily.IPV4 else resolution.ipv6_addresses
         )
     if not candidates:
         raise PinnedHttpError(TransportFailure.TARGET_ADDRESS_UNAVAILABLE)
