@@ -6,13 +6,18 @@ import dns.exception
 import dns.flags
 import dns.message
 import dns.name
+import dns.rdataclass
 import dns.rcode
 import dns.rdatatype
 import dns.rrset
 import dns.resolver
 import pytest
+from dns.rdtypes.ANY.TXT import TXT
 
 from threat_sentinel_api.modules.targets.dns_verification import (
+    MAX_CNAME_LINKS,
+    MAX_DNS_MESSAGE_SIZE,
+    MAX_DNS_RESOURCE_RECORDS,
     DNS_QUERY_TIMEOUT_SECONDS,
     DNSChallengeVerifier,
     DNSVerificationError,
@@ -82,6 +87,43 @@ def txt_fixture(
 
 def cname_fixture(target: str) -> Callable[[dns.message.Message], dns.message.Message]:
     return lambda request: cname_response(request, target)
+
+
+def txt_response_with_record_count(
+    request: dns.message.Message,
+    record_count: int,
+) -> dns.message.Message:
+    response = dns.message.make_response(request)
+    records = ['"challenge-value"', *(f'"filler-{index:03d}"' for index in range(record_count - 1))]
+    response.answer.append(
+        dns.rrset.from_text(
+            request.question[0].name,
+            60,
+            "IN",
+            "TXT",
+            *records,
+        )
+    )
+    return response
+
+
+def large_txt_response(
+    request: dns.message.Message,
+    second_payload_size: int,
+) -> dns.message.Message:
+    response = dns.message.make_response(request)
+    rrset = dns.rrset.RRset(
+        request.question[0].name,
+        dns.rdataclass.IN,
+        dns.rdatatype.TXT,
+    )
+    rrset.add(TXT(dns.rdataclass.IN, dns.rdatatype.TXT, (b"challenge-value",)), 60)
+    for payload_size, marker in ((32_000, b"A"), (second_payload_size, b"B")):
+        payload = marker + b"x" * (payload_size - 1)
+        chunks = tuple(payload[offset : offset + 255] for offset in range(0, payload_size, 255))
+        rrset.add(TXT(dns.rdataclass.IN, dns.rdatatype.TXT, chunks), 60)
+    response.answer.append(rrset)
+    return response
 
 
 def challenge_hash(value: str) -> str:
@@ -214,15 +256,99 @@ def test_rejects_cname_loops() -> None:
 
 
 def test_rejects_cname_chains_over_limit() -> None:
-    responses: list[Callable[[dns.message.Message], dns.message.Message]] = []
-    for index in range(9):
-        target = f"alias-{index}.example.net."
-        responses.append(cname_fixture(target))
-
+    links = MAX_CNAME_LINKS + 1
+    aliases = [f"alias-{index}.example.net." for index in range(links)]
+    responses = [cname_fixture(target) for target in aliases]
+    responses.append(txt_fixture('"challenge-value"'))
     query = FixtureDNSQuery(*responses)
     with pytest.raises(DNSVerificationError):
         verify(query)
-    assert len(query.requests) == 9
+    assert [request.question[0].name.to_text() for request in query.requests] == [
+        "_threatsentinel-verification.example.com.",
+        *aliases[:-1],
+    ]
+
+
+def test_accepts_cname_chain_at_configured_link_limit() -> None:
+    aliases = [f"alias-{index}.example.net." for index in range(MAX_CNAME_LINKS)]
+    responses = [cname_fixture(target) for target in aliases]
+    responses.append(txt_fixture('"challenge-value"'))
+    query = FixtureDNSQuery(*responses)
+
+    verify(query)
+
+    assert [request.question[0].name.to_text() for request in query.requests] == [
+        "_threatsentinel-verification.example.com.",
+        *aliases,
+    ]
+
+
+def test_accepts_largest_serializable_dns_response_below_64_kib_limit() -> None:
+    wire_sizes: list[int] = []
+
+    def largest_response(request: dns.message.Message) -> dns.message.Message:
+        response = large_txt_response(request, 33_168)
+        wire_sizes.append(len(response.to_wire()))
+        return response
+
+    assert MAX_DNS_MESSAGE_SIZE == 64 * 1024
+    verify(FixtureDNSQuery(largest_response))
+
+    assert wire_sizes == [MAX_DNS_MESSAGE_SIZE - 1]
+
+
+def test_dnspython_cannot_serialize_a_message_at_the_configured_64_kib_limit() -> None:
+    def response_at_wire_limit(request: dns.message.Message) -> dns.message.Message:
+        response = large_txt_response(request, 33_169)
+        # dnspython caps DNS wire messages at 65,535 bytes, below this configured 65,536-byte limit.
+        with pytest.raises(dns.exception.TooBig):
+            response.to_wire(max_size=MAX_DNS_MESSAGE_SIZE)
+        return response
+
+    with pytest.raises(DNSVerificationError):
+        verify(FixtureDNSQuery(response_at_wire_limit))
+
+
+def test_accepts_exactly_configured_dns_resource_record_limit() -> None:
+    section_counts: list[tuple[int, int, int]] = []
+
+    def response_with_limit(request: dns.message.Message) -> dns.message.Message:
+        response = txt_response_with_record_count(request, MAX_DNS_RESOURCE_RECORDS)
+        section_counts.append(
+            tuple(
+                sum(len(rrset) for rrset in section)
+                for section in (response.answer, response.authority, response.additional)
+            )
+        )
+        return response
+
+    query = FixtureDNSQuery(response_with_limit)
+
+    verify(query)
+
+    assert section_counts == [(MAX_DNS_RESOURCE_RECORDS, 0, 0)]
+
+
+def test_rejects_one_more_than_configured_dns_resource_record_limit() -> None:
+    section_counts: list[tuple[int, int, int]] = []
+
+    def response_over_limit(request: dns.message.Message) -> dns.message.Message:
+        response = txt_response_with_record_count(request, MAX_DNS_RESOURCE_RECORDS + 1)
+        section_counts.append(
+            tuple(
+                sum(len(rrset) for rrset in section)
+                for section in (response.answer, response.authority, response.additional)
+            )
+        )
+        return response
+
+    query = FixtureDNSQuery(response_over_limit)
+
+    with pytest.raises(DNSVerificationError):
+        verify(query)
+
+    assert len(query.requests) == 1
+    assert section_counts == [(MAX_DNS_RESOURCE_RECORDS + 1, 0, 0)]
 
 
 def test_system_query_retries_truncated_udp_over_tcp(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -420,6 +546,65 @@ def test_rejects_response_still_truncated_after_tcp_fallback(
             "example.com",
             challenge_hash("challenge-value"),
         )
+
+
+def test_tcp_fallback_failure_retries_same_question_at_next_nameserver_without_partial_txt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    initial_owner = "_threatsentinel-verification.example.com."
+    alias = "verification-alias.example.net."
+    resolver = dns.resolver.Resolver(configure=False)
+    resolver.nameservers = ["192.0.2.53", "2001:db8::53"]
+    attempts: list[tuple[str, str, str]] = []
+
+    def fake_udp(
+        request: dns.message.Message,
+        nameserver: str,
+        *,
+        timeout: float,
+        port: int,
+    ) -> dns.message.Message:
+        question_name = request.question[0].name.to_text()
+        attempts.append(("udp", nameserver, question_name))
+        assert timeout > 0
+        assert port == resolver.port == 53
+        if question_name == initial_owner:
+            return cname_response(request, alias)
+        if nameserver == resolver.nameservers[0]:
+            truncated = txt_response(request, '"challenge-value"')
+            truncated.flags |= dns.flags.TC
+            return truncated
+        return txt_response(request, '"wrong-challenge"')
+
+    def failing_tcp(
+        request: dns.message.Message,
+        nameserver: str,
+        *,
+        timeout: float,
+        port: int,
+    ) -> dns.message.Message:
+        attempts.append(("tcp", nameserver, request.question[0].name.to_text()))
+        assert timeout > 0
+        assert port == resolver.port == 53
+        raise dns.exception.Timeout("fixture TCP failure")
+
+    monkeypatch.setattr("dns.query.udp", fake_udp)
+    monkeypatch.setattr("dns.query.tcp", failing_tcp)
+    transport = _SystemDNSMessageQuery()
+    transport._resolver = resolver
+
+    with pytest.raises(DNSVerificationError):
+        DNSChallengeVerifier(transport).verify_challenge(
+            "example.com",
+            challenge_hash("challenge-value"),
+        )
+
+    assert attempts == [
+        ("udp", "192.0.2.53", initial_owner),
+        ("udp", "192.0.2.53", alias),
+        ("tcp", "192.0.2.53", alias),
+        ("udp", "2001:db8::53", alias),
+    ]
 
 
 def test_overall_deadline_exhaustion_across_cname_queries(
