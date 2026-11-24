@@ -137,6 +137,22 @@ def get_challenge(
     return challenge
 
 
+def add_target_row(
+    session: Session,
+    organization: Organization,
+    user: User,
+    hostname: str = "example.com",
+) -> SecurityTarget:
+    target = SecurityTarget(
+        organization_id=organization.id,
+        hostname=hostname,
+        created_by_user_id=user.id,
+    )
+    session.add(target)
+    session.flush()
+    return target
+
+
 @pytest.mark.parametrize(
     "role",
     [OrganizationRole.OWNER, OrganizationRole.ADMIN],
@@ -182,6 +198,140 @@ def test_target_creation_canonicalizes_and_stores_only_challenge_hash(
         assert event is not None
         assert event.details is None
         assert issued.challenge_value not in repr(event)
+
+
+def test_persisted_challenge_expires_one_hour_after_creation(
+    session: Session,
+    make_user: Callable[..., User],
+) -> None:
+    organization, principal, _ = create_organization_principal(session, make_user)
+    session.commit()
+    clock_before_issue = datetime.now(UTC)
+    issued = target_service(session).create_organization_target(
+        principal,
+        organization.id,
+        "example.com",
+    )
+    clock_after_issue = datetime.now(UTC)
+
+    with Session(session.get_bind()) as verification_session:
+        challenge = get_challenge(verification_session, issued.target_id)
+        created_at = challenge.created_at.replace(tzinfo=UTC)
+        expires_at = challenge.expires_at.replace(tzinfo=UTC)
+
+    assert expires_at - created_at == timedelta(hours=1)
+    clock_tolerance = timedelta(seconds=5)
+    assert clock_before_issue - clock_tolerance <= created_at
+    assert created_at <= clock_after_issue + clock_tolerance
+
+
+@pytest.mark.parametrize("hash_length", [63, 65], ids=["too-short", "too-long"])
+def test_challenge_hash_must_have_exactly_64_characters(
+    session: Session,
+    make_user: Callable[..., User],
+    hash_length: int,
+) -> None:
+    organization, _, user = create_organization_principal(session, make_user)
+    target = add_target_row(session, organization, user)
+    created_at = datetime.now(UTC)
+    session.add(
+        TargetVerificationChallenge(
+            organization_id=organization.id,
+            target_id=target.id,
+            issued_by_user_id=user.id,
+            challenge_hash="a" * hash_length,
+            created_at=created_at,
+            expires_at=created_at + timedelta(hours=1),
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+@pytest.mark.parametrize(
+    "expiry_offset",
+    [timedelta(0), timedelta(seconds=-1)],
+    ids=["equal-to-creation", "earlier-than-creation"],
+)
+def test_challenge_expiry_must_be_after_creation(
+    session: Session,
+    make_user: Callable[..., User],
+    expiry_offset: timedelta,
+) -> None:
+    organization, _, user = create_organization_principal(session, make_user)
+    target = add_target_row(session, organization, user)
+    created_at = datetime.now(UTC)
+    session.add(
+        TargetVerificationChallenge(
+            organization_id=organization.id,
+            target_id=target.id,
+            issued_by_user_id=user.id,
+            challenge_hash="a" * 64,
+            created_at=created_at,
+            expires_at=created_at + expiry_offset,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_target_cannot_have_multiple_challenge_rows(
+    session: Session,
+    make_user: Callable[..., User],
+) -> None:
+    organization, _, user = create_organization_principal(session, make_user)
+    target = add_target_row(session, organization, user)
+    created_at = datetime.now(UTC)
+    session.add(
+        TargetVerificationChallenge(
+            organization_id=organization.id,
+            target_id=target.id,
+            issued_by_user_id=user.id,
+            challenge_hash="a" * 64,
+            created_at=created_at,
+            expires_at=created_at + timedelta(hours=1),
+        )
+    )
+    session.flush()
+    session.add(
+        TargetVerificationChallenge(
+            organization_id=organization.id,
+            target_id=target.id,
+            issued_by_user_id=user.id,
+            challenge_hash="b" * 64,
+            created_at=created_at,
+            expires_at=created_at + timedelta(hours=1),
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_challenge_hash_must_be_unique(
+    session: Session,
+    make_user: Callable[..., User],
+) -> None:
+    organization, _, user = create_organization_principal(session, make_user)
+    first_target = add_target_row(session, organization, user, "first.example.com")
+    second_target = add_target_row(session, organization, user, "second.example.com")
+    created_at = datetime.now(UTC)
+    for target in (first_target, second_target):
+        session.add(
+            TargetVerificationChallenge(
+                organization_id=organization.id,
+                target_id=target.id,
+                issued_by_user_id=user.id,
+                challenge_hash="a" * 64,
+                created_at=created_at,
+                expires_at=created_at + timedelta(hours=1),
+            )
+        )
+
+    with pytest.raises(IntegrityError):
+        session.flush()
 
 
 @pytest.mark.parametrize(
