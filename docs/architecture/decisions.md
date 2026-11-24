@@ -139,25 +139,28 @@ The product-owner-approved future Phase 3 target, execution, findings, evidence,
 permissions are specified separately in the
 [Phase 3 architecture blueprint](./phase-3-architecture.md#authorization-matrix-and-api-boundary).
 This is one of nine approved architecture decisions; the complete Phase 3A specification remains
-formally approved and closed. Phase 3B is authorized and underway; Phase 3B.1 hostname
-canonicalization is implemented and pending final acceptance. Phase 3B.2 adds organization target
-and challenge persistence; Phase 3B.3 adds server-side DNS TXT ownership verification and atomic
-challenge consumption for organization targets. No target API is exposed and no challenge rate
-limits are implemented.
+formally approved and closed. Phase 3B is IN PROGRESS, with engineering foundations implemented
+and formal closure pending; Phase 3B.1 hostname canonicalization is ACCEPTED WITH FOLLOW-UP.
+Phase 3B.2 adds organization target and challenge persistence; Phase 3B.3 adds server-side DNS TXT
+ownership verification and atomic challenge consumption for organization targets. No target API is
+exposed and no challenge issuance or verification rate limits are implemented.
 **IP Destination Policy v1 was approved by the project owner on 2026-11-24.**
 The approved policy is implemented as authoritative IANA snapshots, a versioned normalized policy
 artifact, a pure address evaluator, and tests. Phase 3B.4.1–3 additionally implement immutable
 resolution models and secure dual-stack DNS A/AAAA resolution. Phase 3B.4.4 implements the
 one-shot pinned HTTP/TLS transport, strict HTTP/1.1 response parsing, and bounded scan accounting.
-Production-provider egress review remains required before production deployment.
+Provider-specific egress/firewall/DNS review and separate security acceptance remain required before
+production deployment. Ownership of IP-policy snapshot review and refresh must be assigned.
 
 These deliverables do not implement Phase 3C, a queue, worker, scanner, or public target route.
 The canonical resolver algorithm and positive IPv4/IPv6 policy design are in the
 [Phase 3 architecture proposal](./phase-3-architecture.md#dns-aaaa-resolution-proposal) and
 [IP-policy section](./phase-3-architecture.md#explicit-ipv4ipv6-policy). The transport implementation
 does not constitute production egress approval or add scan execution. These capabilities do not
-alter Phase 2 scan-record permissions. Challenge issuance and verification rate limits remain
-prerequisites before exposing target API routes.
+alter Phase 2 scan-record permissions. Challenge issuance and verification rate limits, resolution
+of DNS challenge-record TTL and target expiry/reverification policy, and controlled domain-conflict
+handling for duplicate-target races remain prerequisites before exposing target operations.
+Fixture-based tests do not establish production readiness.
 
 ### Authorization transaction and concurrency protocol (implemented; PostgreSQL integration tests)
 

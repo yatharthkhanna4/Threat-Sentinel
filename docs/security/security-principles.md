@@ -67,13 +67,20 @@ This document defines engineering principles for future implementation. The curr
   product-owner-approved distinctions are specified in the
   [Phase 3 architecture blueprint](../architecture/phase-3-architecture.md#authorization-matrix-and-api-boundary).
   This is one of nine product-owner-approved architecture decisions. The Phase 3A specification is
-  formally approved and closed, and Phase 3B is authorized and underway. Phase 3B.1 hostname
-  canonicalization is implemented and pending final acceptance; DNS TXT ownership verification,
-  secure DNS resolution, and scanning are not implemented. Phase 3B.2 adds organization target and
-  challenge persistence only; creating, rotating, revoking, or consuming a challenge does not prove
-  DNS ownership or mark a target verified. No target API is exposed. These future permissions do
-  not change Phase 2 scan-record behavior. Challenge issuance rate limits must be implemented before
-  exposing target routes. Scan execution and analysis are not implemented.
+  formally approved and closed. Phase 3B is IN PROGRESS: its engineering foundations are
+  implemented, but formal closure is pending. Hostname canonicalization, organization target and
+  challenge persistence, server-side DNS TXT ownership verification, the IP destination policy,
+  immutable DNS-resolution models, dual-stack DNS resolution, and pinned HTTP/TLS transport are
+  implemented. DNS verification and networking are service foundations, not public target
+  operations or scanner execution. No public target API routes, scanner execution, queues, or
+  workers are implemented. Creating, rotating, or revoking a challenge does not prove DNS ownership;
+  verification consumes the challenge only after DNS proof. These future permissions do not change
+  Phase 2 scan-record behavior. Before exposing target operations, implement challenge issuance and
+  verification rate limits, resolve the DNS challenge-record TTL and target expiry/reverification
+  policy, and handle duplicate-target creation races as controlled domain conflicts. Before
+  production, complete provider-specific egress/firewall/DNS review and separate security
+  acceptance, and assign ownership for IP-policy snapshot review and refresh. Fixture-based tests
+  do not establish production readiness. Scan execution and analysis are not implemented.
 - **Constrain resource lookups:** combine the resource ID and authorized personal-owner or
   organization scope in the database query; do not globally load by UUID and rely only on a later
   application-layer check. Return the same generic `404` for missing and out-of-scope resources;

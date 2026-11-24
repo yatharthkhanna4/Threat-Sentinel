@@ -3,15 +3,16 @@
 ## Status and scope
 
 The product owner has approved the nine architecture decisions listed near the end of this
-document and formally signed off and closed Phase 3A. Phase 3B is authorized. This specification
-records intended behavior; Phase 3B.3 implements server-side DNS TXT verification for organization
-targets, including atomic one-time challenge consumption and `verified_at` updates. This is a
-service capability only: no public target API or issuance/verification rate limit is implemented.
-Phase 3B.1 hostname canonicalization is implemented and pending final acceptance. Phase 3B.4.1–3
-implement the approved IP destination policy, immutable DNS-resolution models, and secure dual-stack
-resolver. Phase 3B.4.4 implements the approved one-shot pinned HTTP/TLS transport. Target routes,
-scanner execution, queues, workers, result APIs, UI, and production egress controls remain
-unimplemented; this is not a production-readiness claim.
+document and formally signed off and closed Phase 3A. Overall Phase 3B status is **IN PROGRESS —
+engineering foundations implemented; formal closure pending**. The acceptance status of each
+Phase 3B milestone is recorded in the unresolved-decision map below. Phase 3B.3 implements
+server-side DNS TXT verification for organization targets, including atomic one-time challenge
+consumption and `verified_at` updates; this is a service capability, not a public target operation.
+Phase 3B.4.1–3 implement the IP destination policy, immutable DNS-resolution models, and dual-stack
+DNS resolver. Phase 3B.4.4 implements the pinned HTTP/TLS transport. Public target API routes,
+scanner execution, queues, and workers are not implemented. Security acceptance and production-
+provider egress review remain outstanding; implementation and fixture-based tests do not establish
+production readiness.
 
 **Policy v1 approved and implementation authorized on 2026-11-24.**
 The project owner approved IP Destination Policy v1 on `2026-11-24`. The first implementation
@@ -22,10 +23,11 @@ under Phase 3B.4.
 
 **Not implemented:** public target routes, scanner execution, queue/worker functionality, and
 production deployment configuration. The approved Phase 3B.4 implementation does not change TXT
-resolver configured-nameserver behavior or dnspython exception handling. Production-provider
-egress review is still required before production deployment. The canonical resolver and transport
-requirements remain specified in the [DNS A/AAAA resolution proposal](#dns-aaaa-resolution-proposal)
-and [Explicit IPv4/IPv6 policy](#explicit-ipv4ipv6-policy) sections below.
+resolver configured-nameserver behavior or dnspython exception handling. Security acceptance and
+production-provider egress review are still required before production deployment. The canonical
+resolver and transport requirements remain specified in the
+[DNS A/AAAA resolution proposal](#dns-aaaa-resolution-proposal) and
+[Explicit IPv4/IPv6 policy](#explicit-ipv4ipv6-policy) sections below.
 
 The design preserves the Phase 2 identity, tenancy, authorization, audit, lifecycle, and scan-record
 foundations. It keeps the backend a modular monolith, adds a separately run Python worker, uses
@@ -161,8 +163,7 @@ non-empty labels. It rejects surrounding or embedded whitespace, URLs and their 
 literals and identifiable alternate numeric IP forms, wildcards, malformed separators, and
 invalid IDNA labels. It does not trim or repair malformed input. This is syntactic canonicalization
 only: it does not prove DNS resolution, public address status, ownership, authorization, or
-permission to scan. The Phase 3B.1 implementation uses the resolved IDNA profile and library choice
-and remains pending final acceptance.
+permission to scan. Phase 3B.1 is ACCEPTED WITH FOLLOW-UP.
 
 **Phase 3B.3 implementation:** For organization targets, the server queries the exact absolute owner
 `_threatsentinel-verification.<canonical-hostname>.` using dnspython and the system-configured
@@ -195,8 +196,9 @@ DNS without a database transaction or target lock, then revalidates membership, 
 eligibility, challenge identity/hash, and expiry in a new transaction. It atomically consumes the
 challenge and sets `verified_at`; rotation, revocation, expiry, or a concurrent successful attempt
 invalidates the pending verification. OWNER/ADMIN are the only authorized organization actors.
-There is no public target route, rate limiter, A/AAAA target-address validation, HTTP request, or
-scanner in this implementation. Target verification expiry/reverification policy remains open.
+This Phase 3B.3 service does not expose a public target route or rate limiter, perform
+A/AAAA target-address validation itself, issue HTTP requests, or run a scanner. Target
+verification expiry/reverification policy remains open.
 
 #### Phase 3B.4 DNS address resolution and outbound security
 
@@ -693,49 +695,45 @@ connection-per-scan design. A synchronous one-shot transport is easier to pin, c
 Asynchronous DNS or HTTP would add complexity and require the same pinning guarantee without
 freezing the account or worker model. Defer it unless throughput evidence justifies it.
 
-Implementation sequence, still before any Phase 3C queue implementation:
+The following implementation sequence records the completed engineering work in Phase 3B.4.
 
-The IANA and provider-infrastructure policy review is a hard precondition, not a step that this
-sequence can implicitly complete. Before step 1, establish and approve a policy record containing
-the authoritative IPv4 and IPv6 IANA registry sources and reviewed snapshot date, provider-specific
-infrastructure exclusions, immutable policy version, and review/approval record. No positive
-IPv4/IPv6 allow policy may be implemented or treated as approved, and no address-resolution or
-outbound-transport implementation may begin, until that record exists and is approved.
+IANA policy approval was a hard precondition. The project owner approved IP Destination Policy v1
+on 2026-11-24; the policy, address-resolution models and resolver, and pinned transport have since
+been implemented. Provider-specific egress review and security acceptance remain separate
+prerequisites before production.
 
-1. After the approval gate, add immutable address and resolution types plus tests that consume the
-   approved, versioned IP policy; tests must not define or imply an unapproved positive boundary.
-2. Implement deterministic dnspython A/AAAA/CNAME resolution with nameserver, RCODE, truncation,
-   size/count and deadline semantics.
-3. Add address pinning primitives and generic transport errors; unit-test socket and TLS behavior.
-4. Add the one-shot HTTP/1.1 and HTTPS transport with root GET/HEAD, fixed headers, proxy isolation,
-   incremental framing, size limits and redirects-as-observation.
-5. Add local server integration tests and authorization revalidation tests.
-6. Add container/environment-level egress testing or deployment configuration review, but do not
-   call the system production-ready until infrastructure is verified.
+1. Added immutable address and resolution types with tests consuming the approved, versioned IP
+   policy.
+2. Implemented deterministic dnspython A/AAAA/CNAME resolution with nameserver, RCODE, truncation,
+   size/count, and deadline handling.
+3. Added address pinning and transport behavior, with socket and TLS tests.
+4. Implemented the one-shot HTTP/1.1 and HTTPS transport with fixed boundaries, proxy isolation,
+   incremental framing, size limits, and redirects disabled.
+5. Added fixture-based tests for component behavior and DNS-to-pinned-transport composition.
+
+**Remaining deployment prerequisites:** Provider-specific egress/firewall/DNS review and separate
+security acceptance remain outstanding before production deployment. Assign ownership for IP-policy
+snapshot review and refresh. Production readiness is not established until these prerequisites are
+completed.
 
 No database migration is proposed for Phase 3B.4. Validated addresses and CNAME answers should remain
 ephemeral. Persistence of address snapshots would stale rapidly and could create DNS-rebinding,
 retention and multi-tenant audit risk.
 
-**Open decisions requiring approval before implementation**
+**Implemented Phase 3B.4 decisions and remaining prerequisites**
 
-1. **Positive IPv4/IPv6 policy implementation gate:** resolve the blocker in
-   [Explicit IPv4/IPv6 policy](#explicit-ipv4ipv6-policy) before any address-resolution or
-   outbound-transport code begins.
-2. Exact deny snapshot and infrastructure exclusions: approve provider-specific metadata, virtual
-   infrastructure and reserved-range exclusions against the authoritative registry review.
-3. Deterministic single-resolver-per-attempt and resolver-fallback policy: approve the algorithm in
-   the [DNS A/AAAA resolution proposal](#dns-aaaa-resolution-proposal).
-4. Ephemeral DNS resolution and fresh resolution for every new connection: approve no persisted
-   address/CNAME snapshot and no cross-connection address reuse.
-5. Pinned-address fallback only within one immutable validated set: approve deterministic family
-   fallback with no fresh DNS lookup, and rejection of any mixed or prohibited answer set.
-6. **Implemented in Phase 3B.4.4:** a one-shot literal-IP socket transport with a dedicated bounded
+1. The positive IPv4/IPv6 policy gate was approved and implemented as IP Destination Policy v1.
+2. The resolver uses the documented deterministic resolution, fallback, and immutable validated
+   address-set behavior.
+3. Address and CNAME results remain ephemeral, with fresh resolution for each new connection.
+4. **Implemented in Phase 3B.4.4:** a one-shot literal-IP socket transport with a dedicated bounded
    HTTP/1.1 parser; `http.client` is not the response parser.
-7. **Implemented in Phase 3B.4.4:** fixed `Host`, `Accept-Encoding: identity`, and `Connection: close`
+5. **Implemented in Phase 3B.4.4:** fixed `Host`, `Accept-Encoding: identity`, and `Connection: close`
    headers only; no arbitrary or credential-bearing request headers.
-8. **Implemented in Phase 3B.4.4:** identity-only content coding, rejecting every other coding and
+6. **Implemented in Phase 3B.4.4:** identity-only content coding, rejecting every other coding and
    performing no decompression.
+7. Provider-specific egress/firewall/DNS review and separate security acceptance remain required
+   before production. Ownership of IP-policy snapshot review and refresh must be assigned.
 
 #### Per-connection DNS and IP safety
 
@@ -1260,7 +1258,7 @@ before production scanning. A green unit-test suite is not proof of safe product
 | Phase | Scope and dependencies | Exit criteria and boundary |
 |---|---|---|
 | **3A — Architecture and threat model** | This specification; depends on Phase 2 foundation. | The nine product-owner-approved architecture decisions are recorded; the complete Phase 3A specification is formally signed off and closed. Documentation only; this sign-off does not itself implement features. |
-| **3B — Target verification and outbound security** | Authorized after 3A sign-off and underway. Phase 3B.1 implements hostname canonicalization, pending final acceptance. Phase 3B.2 adds organization-only target and challenge persistence with a one-hour initial challenge expiry. Phase 3B.3 adds bounded organization-target DNS TXT verification and atomic challenge consumption, but no public target API or rate limit. Phase 3B.4.1–3 implement IP Destination Policy v1, immutable DNS models, and the secure dual-stack resolver. Phase 3B.4.4 implements one-shot pinned HTTP/HTTPS transport with strict bounded parsing and accounting. | No scanner, target route, or Phase 3C implementation is added as part of 3B.4. Production use remains gated on separate infrastructure-egress review and security acceptance. |
+| **3B — Target verification and outbound security** | **IN PROGRESS — engineering foundations implemented; formal closure pending.** 3B.1 ACCEPTED WITH FOLLOW-UP; 3B.2 ACCEPTED WITH FOLLOW-UP; 3B.3 ACCEPTED WITH FOLLOW-UP; 3B.4.1 ACCEPTED WITH FOLLOW-UP; 3B.4.2 ACCEPTED; 3B.4.3 ACCEPTED WITH FOLLOW-UP; 3B.4.4 ACCEPTED WITH FOLLOW-UP. | No scanner execution, public target API routes, queues, or workers are implemented. Before exposing target operations: challenge issuance and verification rate limits, DNS challenge-record TTL and target expiry/reverification policy, and controlled domain-conflict handling for duplicate-target races. Before production: provider-specific egress/firewall/DNS review, separate security acceptance, and assigned IP-policy snapshot review/refresh ownership. Fixture-based tests do not establish production readiness. Keep 3C onward as future integration work, separate from the implemented 3B foundations. |
 | **3C — Persistence and execution contracts** | Depends on approved 3B target and policy contracts. Additive target/run/attempt/finding/evidence schema blueprint into implementation, versioned typed contracts, constraints/indexes, idempotency and provenance. | Phase 2 migration compatibility; migration upgrade/downgrade checks; PostgreSQL constraints and tenant-scoped repository tests. No network scanning or worker dispatch. |
 | **3D — Durable queue and worker** | Depends on 3C lifecycle/schema and 3B egress boundary. Implement PostgreSQL claim/lease/heartbeat/fencing, admission, retries, cancellation, reaper, isolated worker process. | PostgreSQL concurrency tests cover duplicate claims, crash recovery, stale workers, cancellation, retry ceiling, no open network transaction, and no duplicate persisted results. No detection modules. |
 | **3E — Scanner framework and safe transport** | Depends on 3B transport policy, 3C contract, and 3D execution lifecycle. Implement only a static trusted registry, bounded execution context, typed progress/observations/findings/errors, safe shared client. | All scanners must use the guarded transport; version/provenance and resource budgets are enforced; adversarial network fixture suite passes. No arbitrary plugins or exploit behavior. |
@@ -1345,18 +1343,19 @@ specification has also received formal sign-off and is closed.
 ## Open risks and implementation decisions
 
 The product-owner-approved principles leave implementation parameters that must be resolved before
-the relevant phase: DNS challenge record TTL; target-verification expiry/reverification policy;
-the [positive IPv4/IPv6 implementation gate](#explicit-ipv4ipv6-policy); admission
-quota and queue retry policies; exact scanner-owned fixed header allowlist; exact severity/confidence
-rule rubric; scan idempotency key lifetime;
+the relevant phase: DNS challenge-record TTL; target-verification expiry/reverification policy;
+challenge issuance and verification rate limits; controlled domain-conflict handling for duplicate
+target creation; admission quota and queue retry policies; exact scanner-owned fixed header
+allowlist; exact severity/confidence rule rubric; scan idempotency key lifetime;
 whether targets survive after all scans expire; user-initiated deletion semantics; audit action
 coverage; exact worker SQL grants and OS/container restrictions; production egress architecture and
 deployment-wide outbound concurrency enforcement before adding processes/replicas; and production
 cost. The selected initial network and retention defaults are approved in Phase 3A. The IDNA
-profile and canonicalization behavior are implemented in Phase 3B.1, pending final acceptance. The
-resolver, exact TXT owner and matching behavior, and server-side challenge-consumption flow are
-implemented in Phase 3B.3;
-verification expiry and egress decisions remain assigned to their appropriate Phase 3B milestones.
+profile and canonicalization behavior are implemented in Phase 3B.1. The resolver, exact TXT owner
+and matching behavior, and server-side challenge-consumption flow are implemented in Phase 3B.3.
+The Phase 3B.4 IP destination policy, immutable DNS-resolution models, dual-stack resolver, and
+pinned HTTP/TLS transport are implemented. Security acceptance, production-provider egress review,
+and ownership of IP-policy snapshot review and refresh remain outstanding.
 
 These are not permission to broaden scan behavior. If a parameter is not specified, implementation
 must choose a conservative fail-closed value and obtain review where it changes customer-visible
@@ -1369,25 +1368,31 @@ This map assigns unresolved implementation decisions to the phase that needs the
 permit a security prerequisite to be deferred beyond the phase that depends on it. Complete each
 prerequisite before enabling its dependent feature.
 
-- **Implemented, pending final acceptance in Phase 3B.1:** UTS #46 non-transitional IDNA
+- **Phase 3B.1 — ACCEPTED WITH FOLLOW-UP:** UTS #46 non-transitional IDNA
   processing, STD3 ASCII rules,
   canonical lowercase A-label output, Unicode normalization and round-trip validation, and
   optional single trailing root-dot removal. Canonicalization does not constitute target
   authorization; DNS TXT verification remains separate.
-- **Resolved in Phase 3B.2 for challenge persistence:** 256-bit URL-safe challenge material,
-  SHA-256 hash-only persistence, one-hour initial expiry, and one-time rotation/revocation state.
-- **Implemented in Phase 3B.3 for organization targets:** exact TXT owner and byte-for-byte record
+- **Phase 3B.2 — ACCEPTED WITH FOLLOW-UP:** 256-bit URL-safe challenge material, SHA-256 hash-only
+  persistence, one-hour initial expiry, and one-time rotation/revocation state. Duplicate-target
+  creation races must be handled as controlled domain conflicts before target operations are exposed.
+- **Phase 3B.3 — ACCEPTED WITH FOLLOW-UP:** exact TXT owner and byte-for-byte record
   matching, dnspython with the system resolver, 3-second query/10-second overall bounds, 8-link
   CNAME limit, one TCP retry for truncation, and authorized two-transaction verification with
-  atomic challenge consumption. No public target route or rate limit is implemented.
-- **Implemented in Phase 3B.4.1–3 and 3B.4.4:** explicit A/AAAA/CNAME resolution, versioned
-  IPv4/IPv6 policy, immutable validated resolutions, literal-IP socket pinning, and a one-shot
-  HTTP/1.1/HTTPS transport. Infrastructure egress controls remain a separate production prerequisite.
-- **Before/during remaining Phase 3B — target verification and outbound security:** DNS challenge
-  record TTL; target-verification expiry and re-verification behavior; approval of the
-  [positive IPv4/IPv6 policy](#explicit-ipv4ipv6-policy); HTTP/1.1 transport
-  implementation choice and security acceptance of mandatory negotiated ALPN; DNS pinning,
-  connection behavior, and the production egress-security design required to validate the boundary.
+  atomic challenge consumption. No public target route is implemented.
+- **Phase 3B.4.1 — ACCEPTED WITH FOLLOW-UP:** versioned IPv4/IPv6 destination policy. Assign
+  ownership for IP-policy snapshot review and refresh.
+- **Phase 3B.4.2 — ACCEPTED:** immutable validated DNS-resolution models.
+- **Phase 3B.4.3 — ACCEPTED WITH FOLLOW-UP:** dual-stack A/AAAA/CNAME resolution with validated
+  address sets and bounded resolver behavior.
+- **Phase 3B.4.4 — ACCEPTED WITH FOLLOW-UP:** literal-IP socket pinning and one-shot HTTP/1.1/HTTPS
+  transport. Security acceptance and production-provider egress review remain outstanding; the
+  implementation and fixture-based tests do not establish production readiness.
+- **Before exposing target operations:** implement challenge issuance and verification rate limits;
+  resolve DNS challenge-record TTL and target-verification expiry/reverification policy; and handle
+  duplicate-target creation races as controlled domain conflicts.
+- **Before production:** complete provider-specific egress/firewall/DNS review and separate security
+  acceptance; assign ownership for IP-policy snapshot review and refresh.
 - **Phase 3C — persistence and execution contracts:** exact worker SQL permissions and tenant/run
   scoping; scan-admission quotas and idempotency semantics; request/run relationships and retention
   data-model requirements; queue lifecycle, cancellation, retry limits, and stale-job recovery
@@ -1409,11 +1414,12 @@ prerequisite before enabling its dependent feature.
   backup and disaster-recovery expiry implementation; legal, contractual, and jurisdictional
   retention review; production hosting, network, and operating costs.
 
-This is a planning map only. It neither asserts that any listed capability has been implemented nor
-claims production readiness. Phase 3A is signed off and closed, and Phase 3B is authorized. The nine
-approved architecture decisions, the Phase 2 permissions and behavior, and the
+This is a planning map for the remaining work; it does not claim production readiness. Phase 3A is
+signed off and closed. The Phase 3B engineering foundations listed above are implemented, and
+formal closure is pending. The nine approved architecture decisions, the Phase 2 permissions and
+behavior, and the
 immutable hostname verification, HTTP/HTTPS port, GET/HEAD, origin-root, no-credentials,
 no-arbitrary-headers, no-redirects, DNS-validation, and TLS-verification boundaries remain
 unchanged. The documented Phase 3B.3 server-side organization-target DNS TXT verification service
-is implemented, but no public target API, worker, finding, evidence, HTTP execution, or production
-readiness capability is claimed here.
+is implemented, but no public target API, scanner execution, queue, worker, finding, or evidence
+capability is claimed here. Fixture-based tests do not establish production readiness.
