@@ -23,6 +23,7 @@ from threat_sentinel_api.modules.networking.pinned_http import (
     MAX_ENCODED_BODY_BYTES,
     MAX_RESPONSE_HEADER_BYTES,
     MAX_RESPONSE_HEADERS,
+    MAX_RESPONSE_TRANSFERRED_BYTES,
     MAX_SCAN_REQUESTS,
     MAX_SCAN_TRANSFERRED_BYTES,
     MAX_SCAN_IDENTITY_BYTES,
@@ -821,6 +822,22 @@ class _FakeTransport(PinnedHttpTransport):
         return _FakeTlsSocket(self.fake_socket, self._selected_alpn)  # type: ignore[return-value]
 
 
+class _FakeSocketPoolTransport(_FakeTransport):
+    def __init__(
+        self,
+        clock: _FakeClock,
+        response_parts: list[list[tuple[bytes, float]]],
+    ) -> None:
+        self.fake_sockets = [_FakeSocket(clock, parts) for parts in response_parts]
+        self.opened_sockets: list[_FakeSocket] = []
+        super().__init__(self.fake_sockets[0])
+
+    def _new_socket(self, _address: object) -> socket.socket:
+        fake_socket = self.fake_sockets[len(self.opened_sockets)]
+        self.opened_sockets.append(fake_socket)
+        return _SocketAdapter(fake_socket)  # type: ignore[return-value]
+
+
 class _FakeTlsSocket(_FakeSocket):
     def __init__(self, raw: _FakeSocket, selected_alpn: str) -> None:
         self.raw = raw
@@ -871,6 +888,184 @@ def _fake_transport(
     )
     budget = ScanBudget(clock() + scan_deadline_delta)
     return transport, clock, budget
+
+
+def _fake_socket_pool_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    response_parts: list[list[tuple[bytes, float]]],
+) -> tuple[_FakeSocketPoolTransport, _FakeClock, ScanBudget]:
+    clock = _FakeClock()
+    monkeypatch.setattr(pinned_http.time, "monotonic", clock)
+    transport = _FakeSocketPoolTransport(clock, response_parts)
+    budget = ScanBudget(clock() + 120.0)
+    return transport, clock, budget
+
+
+def test_transport_request_limit_is_cumulative_and_rejects_before_socket_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+    transport, _, budget = _fake_socket_pool_transport(
+        monkeypatch,
+        [[(response, 0.0)] for _ in range(MAX_SCAN_REQUESTS)],
+    )
+
+    for request_number in range(1, MAX_SCAN_REQUESTS + 1):
+        result = transport.request(
+            _resolution(),
+            scheme="http",
+            method="GET",
+            budget=budget,
+        )
+        assert result.status_code == 200
+        assert result.budget_usage.requests == request_number
+
+    with pytest.raises(PinnedHttpError) as error:
+        transport.request(
+            _resolution(),
+            scheme="http",
+            method="GET",
+            budget=budget,
+        )
+
+    assert error.value.failure is TransportFailure.RESPONSE_LIMIT_EXCEEDED
+    assert budget.usage().requests == MAX_SCAN_REQUESTS
+    assert len(transport.opened_sockets) == MAX_SCAN_REQUESTS
+    assert all(fake_socket.closed for fake_socket in transport.opened_sockets)
+
+
+def test_cumulative_transfer_limit_rejects_later_parsed_response_without_returning_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    successful_body = b"x" * MAX_ENCODED_BODY_BYTES
+    failed_body = b"y" * MAX_ENCODED_BODY_BYTES
+    response_prefix = (
+        b"HTTP/1.1 200 OK\r\nContent-Length: "
+        + str(MAX_ENCODED_BODY_BYTES).encode()
+        + b"\r\n\r\n"
+    )
+    successful_response = response_prefix + successful_body
+    failed_response = response_prefix + failed_body
+    transport, _, budget = _fake_socket_pool_transport(
+        monkeypatch,
+        [[(successful_response, 0.0)] for _ in range(4)]
+        + [[(failed_response, 0.0)]],
+    )
+
+    successful_results = [
+        transport.request(
+            _resolution(),
+            scheme="http",
+            method="GET",
+            budget=budget,
+        )
+        for _ in range(4)
+    ]
+    successful_usage = budget.usage()
+
+    assert successful_usage.requests == 4
+    assert successful_usage.transferred_bytes == sum(
+        result.response_transferred_bytes for result in successful_results
+    )
+    assert successful_usage.identity_bytes == 4 * MAX_ENCODED_BODY_BYTES
+    assert all(
+        result.encoded_body_bytes == MAX_ENCODED_BODY_BYTES
+        for result in successful_results
+    )
+    assert all(
+        result.response_transferred_bytes <= MAX_RESPONSE_TRANSFERRED_BYTES
+        for result in successful_results
+    )
+    assert (
+        successful_usage.transferred_bytes + len(failed_response)
+        > MAX_SCAN_TRANSFERRED_BYTES
+    )
+
+    with pytest.raises(PinnedHttpError) as error:
+        transport.request(
+            _resolution(),
+            scheme="http",
+            method="GET",
+            budget=budget,
+        )
+
+    assert error.value.failure is TransportFailure.RESPONSE_LIMIT_EXCEEDED
+    assert all(result.body == successful_body for result in successful_results)
+    assert all(failed_body not in result.body for result in successful_results)
+    failed_usage = budget.usage()
+    assert failed_usage.requests == 5
+    assert failed_usage.identity_bytes > successful_usage.identity_bytes
+    assert failed_usage.identity_bytes < MAX_SCAN_IDENTITY_BYTES
+    assert failed_usage.transferred_bytes > successful_usage.transferred_bytes
+    assert failed_usage.transferred_bytes <= MAX_SCAN_TRANSFERRED_BYTES
+    assert len(transport.opened_sockets) == 5
+    assert all(fake_socket.closed for fake_socket in transport.opened_sockets)
+
+
+def test_scan_budget_counters_accumulate_across_sequential_transport_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [
+        b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\none",
+        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ntwo!",
+    ]
+    transport, _, budget = _fake_socket_pool_transport(
+        monkeypatch,
+        [[(response, 0.0)] for response in responses],
+    )
+
+    first = transport.request(
+        _resolution(),
+        scheme="http",
+        method="GET",
+        budget=budget,
+    )
+    second = transport.request(
+        _resolution(),
+        scheme="http",
+        method="GET",
+        budget=budget,
+    )
+
+    assert first.budget_usage.requests == 1
+    assert first.budget_usage.identity_bytes == len(first.body)
+    assert second.budget_usage.requests == 2
+    assert second.budget_usage.transferred_bytes == (
+        first.response_transferred_bytes + second.response_transferred_bytes
+    )
+    assert second.budget_usage.identity_bytes == len(first.body) + len(second.body)
+    assert second.budget_usage.decompressed_bytes == len(first.body) + len(second.body)
+    assert first.body == b"one"
+    assert second.body == b"two!"
+
+
+def test_late_partial_body_is_not_returned_and_socket_is_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport, _, budget = _fake_transport(
+        monkeypatch,
+        parts=[
+            (b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\np", 0.0),
+            (b"art", 10.1),
+        ],
+    )
+    returned_results: list[object] = []
+
+    with pytest.raises(PinnedHttpError) as error:
+        returned_results.append(
+            transport.request(
+                _resolution(),
+                scheme="http",
+                method="GET",
+                budget=budget,
+            )
+        )
+
+    assert error.value.failure is TransportFailure.REQUEST_DEADLINE_EXHAUSTED
+    assert returned_results == []
+    assert budget.usage().identity_bytes == 0
+    assert budget.usage().transferred_bytes > 0
+    assert transport.fake_socket.closed
 
 
 def test_tcp_connect_deadline_rejects_late_success(monkeypatch: pytest.MonkeyPatch) -> None:
