@@ -12,6 +12,7 @@ from threat_sentinel_api.modules.networking.dns_address import (
     DNSAddressResolutionError,
     DNSAddressResolver,
     DNSAddressTransportError,
+    MAX_CNAME_LINKS,
     _SystemDNSAddressTransport,
 )
 
@@ -76,6 +77,36 @@ def cname(request: dns.message.Message, target: str) -> dns.message.Message:
         )
     )
     return response
+
+
+def _sequential_cname_responder(
+    link_count: int,
+    queries: list[tuple[str, int]],
+    links: list[tuple[str, str]],
+) -> Callable[[dns.message.Message, str, bool], dns.message.Message]:
+    def respond(
+        request: dns.message.Message,
+        nameserver: str,
+        tcp: bool,
+    ) -> dns.message.Message:
+        del nameserver, tcp
+        owner = request.question[0].name.to_text()
+        record_type = request.question[0].rdtype
+        queries.append((owner, record_type))
+        target_index = (
+            0
+            if owner == "example.com."
+            else int(owner.removeprefix("link-").removesuffix(".example.net.")) + 1
+        )
+        if target_index < link_count:
+            target = f"link-{target_index}.example.net."
+            links.append((owner, target))
+            return cname(request, target)
+        if record_type == dns.rdatatype.A:
+            return answer(request, "A", "8.8.8.8")
+        return answer(request, "AAAA", "2001:4860:4860::8888")
+
+    return respond
 
 
 def protocol_response(
@@ -165,6 +196,32 @@ def test_completed_protocol_outcomes_do_not_fallback(rcode: dns.rcode.Rcode) -> 
     assert calls == ["192.0.2.53"]
 
 
+def test_aaaa_protocol_failure_does_not_fallback_after_a_successful_a_answer() -> None:
+    calls: list[tuple[str, int]] = []
+
+    def respond(
+        request: dns.message.Message,
+        nameserver: str,
+        tcp: bool,
+    ) -> dns.message.Message:
+        del tcp
+        record_type = request.question[0].rdtype
+        calls.append((nameserver, record_type))
+        if record_type == dns.rdatatype.A:
+            return answer(request, "A", "8.8.8.8")
+        return protocol_response(request, dns.rcode.SERVFAIL)
+
+    transport = FixtureTransport(("192.0.2.53", "192.0.2.54"), respond)
+
+    with pytest.raises(DNSAddressResolutionError):
+        DNSAddressResolver(transport=transport).resolve("example.com")
+
+    assert calls == [
+        ("192.0.2.53", dns.rdatatype.A),
+        ("192.0.2.53", dns.rdatatype.AAAA),
+    ]
+
+
 def test_both_nodata_fails() -> None:
     transport = FixtureTransport(
         ("192.0.2.53",),
@@ -236,7 +293,7 @@ def test_cname_chain_in_response_is_followed_without_extra_query() -> None:
     assert result.cname_chain[0].target == "alias.example.net"
 
 
-@pytest.mark.parametrize("kind", ["cycle", "disjoint", "excessive"])
+@pytest.mark.parametrize("kind", ["cycle", "disjoint"])
 def test_malformed_cname_chains_fail(kind: str) -> None:
     def respond(
         request: dns.message.Message,
@@ -246,20 +303,68 @@ def test_malformed_cname_chains_fail(kind: str) -> None:
         del nameserver, tcp
         if kind == "cycle":
             target = "example.com."
-        elif kind == "disjoint":
-            target = "one.example.net."
         else:
-            index = sum(
-                1
-                for item in getattr(respond, "seen", ())
-                if item == request.question[0].name.to_text()
-            )
-            target = f"link-{index}.example.net."
+            target = "one.example.net."
         return cname(request, target)
 
     transport = FixtureTransport(("192.0.2.53",), respond)
     with pytest.raises(DNSAddressResolutionError):
         DNSAddressResolver(transport=transport).resolve("example.com")
+
+
+def test_cname_chain_at_configured_limit_is_resolved() -> None:
+    queries: list[tuple[str, int]] = []
+    links: list[tuple[str, str]] = []
+    expected_links = [
+        ("example.com.", "link-0.example.net."),
+        *[
+            (f"link-{index}.example.net.", f"link-{index + 1}.example.net.")
+            for index in range(MAX_CNAME_LINKS - 1)
+        ],
+    ]
+    expected_owners = [owner for owner, _ in expected_links] + [
+        expected_links[-1][1]
+    ]
+    transport = FixtureTransport(
+        ("192.0.2.53",),
+        _sequential_cname_responder(MAX_CNAME_LINKS, queries, links),
+    )
+
+    result = DNSAddressResolver(transport=transport).resolve("example.com")
+
+    assert len(result.cname_chain) == MAX_CNAME_LINKS
+    assert result.terminal_owner == f"link-{MAX_CNAME_LINKS - 1}.example.net"
+    assert links == expected_links * 2
+    assert queries == [
+        *((owner, dns.rdatatype.A) for owner in expected_owners),
+        *((owner, dns.rdatatype.AAAA) for owner in expected_owners),
+    ]
+
+
+def test_cname_chain_one_over_configured_limit_fails_with_distinct_links() -> None:
+    queries: list[tuple[str, int]] = []
+    links: list[tuple[str, str]] = []
+    expected_links = [
+        ("example.com.", "link-0.example.net."),
+        *[
+            (f"link-{index}.example.net.", f"link-{index + 1}.example.net.")
+            for index in range(MAX_CNAME_LINKS)
+        ],
+    ]
+    transport = FixtureTransport(
+        ("192.0.2.53",),
+        _sequential_cname_responder(MAX_CNAME_LINKS + 1, queries, links),
+    )
+
+    with pytest.raises(DNSAddressResolutionError):
+        DNSAddressResolver(transport=transport).resolve("example.com")
+
+    assert links == expected_links
+    assert len({owner for owner, _ in links}) == MAX_CNAME_LINKS + 1
+    assert queries == [
+        (owner, dns.rdatatype.A)
+        for owner, _ in expected_links
+    ]
 
 
 def test_different_cname_chains_across_families_fail() -> None:
@@ -351,6 +456,49 @@ def test_system_transport_udp_timeout_restarts_complete_attempt(
     ]
     assert all(nameserver == "192.0.2.54" for nameserver, _ in calls[1:])
     assert result.ipv4_addresses[0].address == "8.8.8.8"
+
+
+def test_aaaa_transport_failure_restarts_complete_dual_stack_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, int]] = []
+
+    def udp(
+        request: dns.message.Message,
+        nameserver: str,
+        *,
+        timeout: float,
+        port: int,
+    ) -> dns.message.Message:
+        del timeout, port
+        record_type = request.question[0].rdtype
+        calls.append((nameserver, record_type))
+        if nameserver == "192.0.2.53" and record_type == dns.rdatatype.AAAA:
+            raise OSError("AAAA transport failed")
+        if record_type == dns.rdatatype.A:
+            address = "8.8.8.8" if nameserver == "192.0.2.53" else "1.1.1.1"
+            return answer(request, "A", address)
+        return answer(request, "AAAA", "2606:4700:4700::1111")
+
+    monkeypatch.setattr(dns.query, "udp", udp)
+    transport = _SystemDNSAddressTransport()
+    result = DNSAddressResolver(
+        transport=transport,
+        nameservers=("192.0.2.53", "192.0.2.54"),
+    ).resolve("example.com")
+
+    assert calls == [
+        ("192.0.2.53", dns.rdatatype.A),
+        ("192.0.2.53", dns.rdatatype.AAAA),
+        ("192.0.2.54", dns.rdatatype.A),
+        ("192.0.2.54", dns.rdatatype.AAAA),
+    ]
+    assert tuple(address.address for address in result.ipv4_addresses) == ("1.1.1.1",)
+    assert tuple(address.address for address in result.ipv6_addresses) == (
+        "2606:4700:4700::1111",
+    )
+    assert result.a_family.addresses == result.ipv4_addresses
+    assert result.aaaa_family.addresses == result.ipv6_addresses
 
 
 def test_system_transport_tcp_failure_restarts_complete_attempt(
