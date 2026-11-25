@@ -144,6 +144,10 @@ and formal closure pending; Phase 3B.1 hostname canonicalization is ACCEPTED WIT
 Phase 3B.2 adds organization target and challenge persistence; Phase 3B.3 adds server-side DNS TXT
 ownership verification and atomic challenge consumption for organization targets. No target API is
 exposed and no challenge issuance or verification rate limits are implemented.
+The [Phase 3C.1 contract and decision freeze](./phase-3c1-contract-freeze.md) defines the
+documentation-only organization-target execution baseline for target snapshots, tenant integrity,
+idempotency, lifecycle, findings, evidence, and versioned contracts. It does not change the Phase
+2 scan persistence routes or add execution behavior.
 **IP Destination Policy v1 was approved by the project owner on 2026-11-24.**
 The approved policy is implemented as authoritative IANA snapshots, a versioned normalized policy
 artifact, a pure address evaluator, and tests. Phase 3B.4.1–3 additionally implement immutable

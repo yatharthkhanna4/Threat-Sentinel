@@ -1259,7 +1259,7 @@ before production scanning. A green unit-test suite is not proof of safe product
 |---|---|---|
 | **3A — Architecture and threat model** | This specification; depends on Phase 2 foundation. | The nine product-owner-approved architecture decisions are recorded; the complete Phase 3A specification is formally signed off and closed. Documentation only; this sign-off does not itself implement features. |
 | **3B — Target verification and outbound security** | **IN PROGRESS — engineering foundations implemented; formal closure pending.** 3B.1 ACCEPTED WITH FOLLOW-UP; 3B.2 ACCEPTED WITH FOLLOW-UP; 3B.3 ACCEPTED WITH FOLLOW-UP; 3B.4.1 ACCEPTED WITH FOLLOW-UP; 3B.4.2 ACCEPTED; 3B.4.3 ACCEPTED WITH FOLLOW-UP; 3B.4.4 ACCEPTED WITH FOLLOW-UP. | No scanner execution, public target API routes, queues, or workers are implemented. Before exposing target operations: challenge issuance and verification rate limits, DNS challenge-record TTL and target expiry/reverification policy, and controlled domain-conflict handling for duplicate-target races. Before production: provider-specific egress/firewall/DNS review, separate security acceptance, and assigned IP-policy snapshot review/refresh ownership. Fixture-based tests do not establish production readiness. Keep 3C onward as future integration work, separate from the implemented 3B foundations. |
-| **3C — Persistence and execution contracts** | Depends on approved 3B target and policy contracts. Additive target/run/attempt/finding/evidence schema blueprint into implementation, versioned typed contracts, constraints/indexes, idempotency and provenance. | Phase 2 migration compatibility; migration upgrade/downgrade checks; PostgreSQL constraints and tenant-scoped repository tests. No network scanning or worker dispatch. |
+| **3C — Persistence and execution contracts** | Depends on approved 3B target and policy contracts. Additive target/run/attempt/finding/evidence schema blueprint into implementation, versioned typed contracts, constraints/indexes, idempotency and provenance. | The [Phase 3C.1 contract and decision freeze](./phase-3c1-contract-freeze.md) documents the approved 3C.1 boundary. Phase 3C.1 is documentation and pure contract/lifecycle work only: no migration, ORM, persistence, public execution route, queue, worker, scanner, or detection implementation. Later 3C persistence phases remain gated by migration compatibility, PostgreSQL constraints, tenant-scoped repository tests, and pure-contract-versus-database-concurrency separation. |
 | **3D — Durable queue and worker** | Depends on 3C lifecycle/schema and 3B egress boundary. Implement PostgreSQL claim/lease/heartbeat/fencing, admission, retries, cancellation, reaper, isolated worker process. | PostgreSQL concurrency tests cover duplicate claims, crash recovery, stale workers, cancellation, retry ceiling, no open network transaction, and no duplicate persisted results. No detection modules. |
 | **3E — Scanner framework and safe transport** | Depends on 3B transport policy, 3C contract, and 3D execution lifecycle. Implement only a static trusted registry, bounded execution context, typed progress/observations/findings/errors, safe shared client. | All scanners must use the guarded transport; version/provenance and resource budgets are enforced; adversarial network fixture suite passes. No arbitrary plugins or exploit behavior. |
 | **3F — Security detection modules** | Depends on 3E. Add read-only TLS/certificate, DNS configuration, HTTPS enforcement, HTTP security-header, cookie-attribute checks, and only separately approved safe website configuration checks. | Per-rule fixtures verify positive and negative cases, severity/confidence, evidence minimization and false-positive boundaries. No exploitation, brute force, forms, state change, or unbounded crawling. |
@@ -1393,10 +1393,15 @@ prerequisite before enabling its dependent feature.
   duplicate-target creation races as controlled domain conflicts.
 - **Before production:** complete provider-specific egress/firewall/DNS review and separate security
   acceptance; assign ownership for IP-policy snapshot review and refresh.
+- **Phase 3C.1 — contract and decision freeze:** organization-target-only scope; parent/target/run
+  composite tenant integrity; immutable target snapshots; principal-scoped key and payload hashing;
+  no-run closure; lifecycle, findings, evidence, and versioned Python/TypeScript contracts. Completed
+  as documentation/pure-contract work only.
 - **Phase 3C — persistence and execution contracts:** exact worker SQL permissions and tenant/run
-  scoping; scan-admission quotas and idempotency semantics; request/run relationships and retention
-  data-model requirements; queue lifecycle, cancellation, retry limits, and stale-job recovery
-  semantics.
+  scoping; scan-admission quotas and idempotency database semantics; request/run relationships and
+  retention data-model requirements; queue lifecycle, cancellation, retry limits, and stale-job
+  recovery semantics. Split pure contract/hash work in 3C.1 from database concurrency work in
+  3C.4/3C.5.
 - **Phase 3D — durable queue and isolated worker:** OS/container privileges and filesystem
   restrictions; worker process isolation and database credentials; lease, fencing, and concurrency
   enforcement details; aggregate concurrency enforcement before multiple workers or replicas are

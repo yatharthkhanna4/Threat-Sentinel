@@ -164,6 +164,13 @@ assigned. The approved resolver and outbound requirements are described in the
 [Phase 3 architecture proposal](./phase-3-architecture.md#dns-aaaa-resolution-proposal) and
 [IP-policy section](./phase-3-architecture.md#explicit-ipv4ipv6-policy).
 
+The [Phase 3C.1 contract and decision freeze](./phase-3c1-contract-freeze.md) is the
+documentation-only baseline for organization-target execution contracts, target snapshots,
+tenant integrity, idempotency, run lifecycle, findings, evidence, and versioned DTO boundaries.
+It preserves the Phase 2 public scan-record contracts and the `1c2f78b9d640` migration head.
+Phase 3C.1 does not add ORM models, migrations, database persistence, queue/worker behavior,
+scanner execution, detection modules, or public execution routes.
+
 ## Planned, not implemented
 
 Protected scan persistence and the lifecycle API described in the
